@@ -19,6 +19,7 @@
             [kagi.governor :as governor]
             [kagi.phase :as phase]
             [kagi.crypto :as crypto]
+            [kagi.cacao :as cacao]
             [kagi.ledger :as ledger]
             [kagi.vault :as vault]
             [kagi.store :as store]))
@@ -129,9 +130,14 @@
                   (fn [{:keys [context]}]
                     ;; depth-1 self-mint: actor が自分の鍵由来 graph の owner として
                     ;; 公開鍵束(:register = identity/member-record)を提示すれば登録する
-                    ;; (owner hand-off も共有 token も不要)。CACAO 署名検証は段階導入。
+                    ;; (owner hand-off も共有 token も不要)。:cacao があれば SIWE/Ed25519 を検証し、
+                    ;; 失敗なら以降の副作用に進めず :hold へ送る。
                     (when-let [m (:register context)] (store/put-member! store* m))
-                    {:context context :audit [{:t :authn :actor (:did context)}]}))
+                    (let [authed? (if-let [c (:cacao context)]
+                                    (:ok? (cacao/verify c {:aud (:aud context)}))
+                                    true)]
+                      {:context (assoc context :authed? authed?)
+                       :audit [{:t :authn :actor (:did context) :verified? authed?}]})))
       (g/add-node :advise
                   (fn [{:keys [request context]}]
                     (let [p (advisor/-advise advisor request context)]
@@ -172,7 +178,9 @@
                       {:result {:effect :held}})))
       (g/set-entry-point :intake)
       (g/add-edge :intake :authn)
-      (g/add-edge :authn :advise)
+      (g/add-conditional-edges :authn
+                               (fn [{:keys [context]}]
+                                 (if (false? (:authed? context)) :hold :advise)))
       (g/add-edge :advise :govern)
       (g/add-edge :govern :decide)
       (g/add-conditional-edges :decide

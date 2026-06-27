@@ -7,6 +7,7 @@
             [kagi.vault :as vault]
             [kagi.ledger :as ledger]
             [kagi.identity :as identity]
+            [kagi.cacao :as cacao]
             [kagi.crypto :as crypto]))
 
 (defn- fresh []
@@ -108,6 +109,29 @@
                   :register (identity/member-record id :owner)})]
       (is (some? (store/member st (:did id))) "メンバー登録された")
       (is (= :owner (:member/role (store/member st (:did id))))))))
+
+(deftest authn-rejects-invalid-cacao
+  (testing "無効な CACAO は authn で弾かれ副作用に進まず HOLD"
+    (let [cr (crypto/jvm-provider)
+          st (store/mem-store {:members {"did:key:zO" #:member{:did "did:key:zO" :role :owner}}})
+          actor (op/build st {:crypto cr})
+          ctx {:did "did:key:zO" :role :owner :phase 1 :vmk (crypto/rand-bytes cr 32)
+               :purpose :daily :aud "https://kotobase.net" :cacao "not-a-valid-cacao"}
+          r (run actor {:op :item/list :compartment "work"} ctx)]
+      (is (= :held (get-in r [:result :effect]))))))
+
+(deftest authn-accepts-valid-cacao
+  (testing "自己発行した有効 CACAO は authn を通過して op を実行"
+    (let [cr (crypto/jvm-provider)
+          id (identity/generate-identity cr)
+          tok (cacao/mint id {:cap :cap/transact :scope (:graph id)}
+                          {:aud "https://kotobase.net" :nonce "n"})
+          st (store/mem-store {:members {(:did id) #:member{:did (:did id) :role :owner}}})
+          actor (op/build st {:crypto cr})
+          ctx {:did (:did id) :role :owner :phase 1 :vmk (crypto/rand-bytes cr 32)
+               :purpose :daily :aud "https://kotobase.net" :cacao tok}
+          r (run actor {:op :item/list :compartment "work"} ctx)]
+      (is (= :listed (get-in r [:result :effect]))))))
 
 (deftest pqc-share-with-real-identities
   (testing "実 identity 同士: owner が共有 → 受信者が自分の identity KEM 秘密鍵で復元"

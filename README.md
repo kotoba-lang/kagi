@@ -56,8 +56,12 @@ clojure -M:dev:run        # デモ
 > - **hybrid identity**(`kagi.identity`): Ed25519 authority(did:key/IPNS graph) + ML-DSA-65 共同署名。
 > - **改竄検知台帳**(`kagi.ledger`): ハッシュ鎖 + entry ごとの hybrid 署名、`verify-chain` で検証。
 > - actor が `:signer` 付きで commit/hold を全署名し、`verify-chain` で鎖検証(end-to-end test)。
+> - **自己発行 CACAO**(`kagi.cacao`): SIWE/EIP-4361 を Ed25519 did:key で mint、`verify` が
+>   CBOR decode + did:key→公開鍵復元 + Ed25519 検証(iss 詐称・改竄・audience 不一致を reject)。
+>   actor `:authn` が CACAO を実検証し、失敗を `:hold` に送る。
+> - **メンバー登録/共有**: `:authn` が depth-1 self-mint 登録、実 identity 同士の PQC 共有。
 >
-> 検証: **20 tests / 45 assertions pass**(KEM 往復・署名 tamper reject・PQC 共有・Argon2id・
-> 台帳の hash/sig 改竄検知)。CLJS/WASM provider(kotoba-crypto Rust)と kotoba-server 実 backend
-> (`KotobaStore` XRPC)・SealedBlockStore 配線は段階導入。
+> 検証: **28 tests / 58 assertions pass**(KEM 往復・署名 tamper reject・PQC 共有・Argon2id・
+> 台帳改竄検知・CACAO 詐称/改竄 reject・authn 強制)。CLJS/WASM provider(kotoba-crypto Rust)と
+> kotoba-server 実 backend(`KotobaStore` XRPC)・SealedBlockStore 配線は段階導入。
 > 秘密鍵は `.kagi/identity.edn`（gitignore）。git に絶対コミットしない。
