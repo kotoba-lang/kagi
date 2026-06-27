@@ -9,6 +9,7 @@
 
 (defprotocol Store
   (member [s did])
+  (put-member! [s member-rec])      ; depth-1 self-mint: actor が自分の公開鍵束を登録
   (item [s id])
   (items-in [s compartment])
   (grants-of [s item-id])
@@ -28,6 +29,7 @@
 (defrecord MemStore [a]
   Store
   (member [_ did] (get-in @a [:members did]))
+  (put-member! [s rec] (swap! a assoc-in [:members (:member/did rec)] rec) s)
   (item [_ id] (get-in @a [:items id]))
   (items-in [_ c] (filterv #(= c (:item/compartment %)) (vals (:items @a))))
   (grants-of [_ item-id] (filterv #(= item-id (:grant/item %)) (vals (:grants @a))))
@@ -55,6 +57,7 @@
 (defrecord KotobaStore [db-api conn]
   Store
   (member [_ did] ((:pull db-api) conn '[*] [:member/did did]))
+  (put-member! [s rec] ((:transact! db-api) conn [rec]) s)
   (item [_ id] ((:pull db-api) conn '[*] [:item/id id]))
   (items-in [_ c]
     ((:q db-api) '[:find [(pull ?e [*]) ...] :in $ ?c

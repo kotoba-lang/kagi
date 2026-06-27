@@ -101,7 +101,11 @@
     :share/revoke
     (let [{:keys [item-id recipient-did]} request]
       (store/revoke-grant! store* (str item-id "->" recipient-did))
-      {:effect :revoked :item item-id :to recipient-did})))
+      {:effect :revoked :item item-id :to recipient-did})
+
+    :item/list
+    {:effect :listed
+     :items (mapv :item/id (store/items-in store* (:compartment request)))}))
 
 ;; ───────── グラフ ─────────
 
@@ -123,8 +127,11 @@
       (g/add-node :intake (fn [s] s))
       (g/add-node :authn
                   (fn [{:keys [context]}]
-                    ;; CACAO/hybrid 署名検証(段階導入)。現状は context の identity を信頼。
-                    {:context context}))
+                    ;; depth-1 self-mint: actor が自分の鍵由来 graph の owner として
+                    ;; 公開鍵束(:register = identity/member-record)を提示すれば登録する
+                    ;; (owner hand-off も共有 token も不要)。CACAO 署名検証は段階導入。
+                    (when-let [m (:register context)] (store/put-member! store* m))
+                    {:context context :audit [{:t :authn :actor (:did context)}]}))
       (g/add-node :advise
                   (fn [{:keys [request context]}]
                     (let [p (advisor/-advise advisor request context)]

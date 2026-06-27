@@ -97,6 +97,42 @@
       (is (= rdid (:grant/recipient grant)))
       (is (= secret (String. ^bytes pt "UTF-8")) "受信者が PQC envelope から平文を復元"))))
 
+(deftest authn-self-registers-member
+  (testing "authn が :register(member-record)を depth-1 self-mint で登録する"
+    (let [cr (crypto/jvm-provider)
+          id (identity/generate-identity cr)
+          st (store/mem-store)
+          actor (op/build st {:crypto cr})
+          _ (run actor {:op :item/list :compartment "work"}
+                 {:did (:did id) :role :owner :phase 1
+                  :register (identity/member-record id :owner)})]
+      (is (some? (store/member st (:did id))) "メンバー登録された")
+      (is (= :owner (:member/role (store/member st (:did id))))))))
+
+(deftest pqc-share-with-real-identities
+  (testing "実 identity 同士: owner が共有 → 受信者が自分の identity KEM 秘密鍵で復元"
+    (let [cr (crypto/jvm-provider)
+          owner-id (identity/generate-identity cr)
+          recip-id (identity/generate-identity cr)
+          st (store/mem-store)
+          _ (store/put-member! st (identity/member-record owner-id :owner))
+          _ (store/put-member! st (identity/member-record recip-id :member))
+          actor (op/build st {:crypto cr :signer (identity/sign-secret owner-id)})
+          owner {:did (:did owner-id) :role :owner :phase 2
+                 :vmk (crypto/rand-bytes cr 32) :purpose :daily-use :consent? true}
+          secret "ghp_real_identities"
+          _ (run actor {:op :item/create :item-id "ri" :compartment "work"
+                        :plaintext (.getBytes secret "UTF-8")} owner)
+          _ (run actor {:op :share/grant :item-id "ri" :recipient-did (:did recip-id)} owner)
+          grant (first (store/grants-of st "ri"))
+          it    (store/item st "ri")
+          dek   (crypto/accept-share cr (identity/kem-secret recip-id) (:grant/envelope grant))
+          pt    (crypto/open-item cr dek (:item/nonce it)
+                                  (store/block-get st (:item/cid it)) (vault/item-aad "ri"))]
+      (is (= (:did recip-id) (:grant/recipient grant)))
+      (is (= secret (String. ^bytes pt "UTF-8"))
+          "受信者は自分の identity 秘密鍵だけで PQC envelope を開ける"))))
+
 (deftest high-value-escalates-not-commits
   (testing "高価値カテゴリの reveal は自動 commit されず escalate(承認待ち)"
     (let [[_st cr actor] (fresh)

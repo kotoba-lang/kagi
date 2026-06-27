@@ -6,7 +6,8 @@
 
   秘密鍵(Ed25519 + ML-DSA + KEM)は `.kagi/identity.edn` に永続し **git に絶対コミット
   しない**(.gitignore)。"
-  (:require [clojure.edn :as edn])
+  (:require [clojure.edn :as edn]
+            [kagi.crypto :as crypto])
   (:import [java.security KeyPairGenerator KeyFactory Key]
            [java.security.spec PKCS8EncodedKeySpec X509EncodedKeySpec]
            [java.util Base64]))
@@ -14,6 +15,8 @@
 (defn- enc ^bytes [^Key k] (.getEncoded k))
 (defn- b64 ^String [^bytes b] (.encodeToString (Base64/getEncoder) b))
 (defn- unb64 ^bytes [^String s] (.decode (Base64/getDecoder) s))
+(defn- b64-map [m] (into {} (map (fn [[k v]] [k (b64 v)])) m))
+(defn- unb64-map [m] (into {} (map (fn [[k v]] [k (unb64 v)])) m))
 
 (def ^:private b58 "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 
@@ -59,17 +62,32 @@
 (defn generate-identity
   "fresh hybrid identity。Ed25519 が **authority**(did:key/IPNS graph、kotoba 不変)で、
    ML-DSA-65 を vault commit/台帳の **hybrid 共同署名** として加法的に併発行する
-   (`:mldsa-public-b64` は graph に publish)。KEM 受信鍵は別途 crypto provider で生成。"
-  []
-  (let [kp  (.generateKeyPair (KeyPairGenerator/getInstance "Ed25519"))
-        pub (.getPublic kp)
-        ml  (.generateKeyPair (KeyPairGenerator/getInstance "ML-DSA-65"))]
-    {:private-key (.getPrivate kp) :public-key pub
-     :did (did-key pub) :graph (ipns-name pub)
-     :private-b64 (b64 (enc (.getPrivate kp)))
-     :public-b64  (b64 (enc pub))
-     :mldsa-private-b64 (b64 (enc (.getPrivate ml)))
-     :mldsa-public-b64  (b64 (enc (.getPublic ml)))}))
+   (`:mldsa-public-b64` は graph に publish)。provider を渡すと **hybrid KEM 受信鍵**
+   (X25519+ML-KEM-768)も生成し、他メンバーがこの identity へ secret を共有できる。"
+  ([] (generate-identity nil))
+  ([provider]
+   (let [kp  (.generateKeyPair (KeyPairGenerator/getInstance "Ed25519"))
+         pub (.getPublic kp)
+         ml  (.generateKeyPair (KeyPairGenerator/getInstance "ML-DSA-65"))
+         kem (when provider (crypto/kem-keypair provider))]
+     (cond-> {:private-key (.getPrivate kp) :public-key pub
+              :did (did-key pub) :graph (ipns-name pub)
+              :private-b64 (b64 (enc (.getPrivate kp)))
+              :public-b64  (b64 (enc pub))
+              :mldsa-private-b64 (b64 (enc (.getPrivate ml)))
+              :mldsa-public-b64  (b64 (enc (.getPublic ml)))}
+       kem (assoc :kem-public (b64-map (:public kem))
+                  :kem-secret (b64-map (:secret kem)))))))
+
+(defn kem-public
+  "他メンバーがこの identity へ encapsulate するための hybrid KEM 公開 bundle {:x :pq}。"
+  [id]
+  (some-> (:kem-public id) unb64-map))
+
+(defn kem-secret
+  "accept-share で envelope を開くための hybrid KEM 秘密 bundle。"
+  [id]
+  (some-> (:kem-secret id) unb64-map))
 
 (defn sign-secret
   "crypto provider の `sign*` に渡す秘密 bundle {:ed <pkcs8> :mldsa <pkcs8>}。"
@@ -81,6 +99,12 @@
   [{:keys [public-b64 mldsa-public-b64]}]
   {:ed (unb64 public-b64) :mldsa (unb64 mldsa-public-b64)})
 
+(defn member-record
+  "graph に publish するメンバー entity(depth-1 self-mint)。公開鍵束のみ(秘密は出さない)。"
+  [id role]
+  (cond-> #:member{:did (:did id) :role role :sign-pub (b64-map (sign-public id))}
+    (:kem-public id) (assoc :member/kem-pub (kem-public id))))
+
 (defn load-identity [{:keys [private-b64 public-b64] :as m}]
   (let [kf (KeyFactory/getInstance "Ed25519")
         priv (.generatePrivate kf (PKCS8EncodedKeySpec. (.decode (Base64/getDecoder) private-b64)))
@@ -88,15 +112,17 @@
     (merge m {:private-key priv :public-key pub :did (did-key pub) :graph (ipns-name pub)})))
 
 (defn load-or-create-identity!
-  "per-actor 鍵を `path`(.kagi/identity.edn) から読込、無ければ生成→永続(b64 のみ保存)。"
-  [path]
-  (let [f (java.io.File. ^String path)]
-    (if (.exists f)
-      (load-identity (edn/read-string (slurp f)))
-      (let [id (generate-identity)
-            parent (.getParentFile (.getAbsoluteFile f))]
-        (when parent (.mkdirs parent))
-        (spit f (pr-str (select-keys id [:private-b64 :public-b64
-                                         :mldsa-private-b64 :mldsa-public-b64
-                                         :kem-private-b64 :kem-public-b64])))
-        id))))
+  "per-actor 鍵を `path`(.kagi/identity.edn) から読込、無ければ生成→永続(b64 のみ保存)。
+   provider を渡すと hybrid KEM 受信鍵も生成・永続する。"
+  ([path] (load-or-create-identity! path nil))
+  ([path provider]
+   (let [f (java.io.File. ^String path)]
+     (if (.exists f)
+       (load-identity (edn/read-string (slurp f)))
+       (let [id (generate-identity provider)
+             parent (.getParentFile (.getAbsoluteFile f))]
+         (when parent (.mkdirs parent))
+         (spit f (pr-str (select-keys id [:private-b64 :public-b64
+                                          :mldsa-private-b64 :mldsa-public-b64
+                                          :kem-public :kem-secret])))
+         id)))))
