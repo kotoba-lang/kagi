@@ -4,6 +4,7 @@
             [langgraph.graph :as g]
             [kagi.operation :as op]
             [kagi.store :as store]
+            [kagi.vault :as vault]
             [kagi.crypto :as crypto]))
 
 (defn- fresh []
@@ -49,6 +50,31 @@
                  (assoc owner :purpose :seed))
           rv (run actor {:op :item/reveal :item-id "k3"} owner)]
       (is (= :held (get-in rv [:result :effect]))))))
+
+(deftest pqc-share-end-to-end
+  (testing "owner が共有 → 受信者が hybrid KEM grant envelope を decap して平文を復元"
+    (let [cr     (crypto/jvm-provider)
+          rkp    (crypto/kem-keypair cr)
+          rdid   "did:key:zRecipient"
+          st     (store/mem-store
+                  {:members {"did:key:zOwner" #:member{:did "did:key:zOwner" :role :owner}
+                             rdid #:member{:did rdid :role :member :kem-pub (:public rkp)}}})
+          actor  (op/build st {:crypto cr})
+          owner  {:did "did:key:zOwner" :role :owner :phase 2
+                  :vmk (crypto/rand-bytes cr 32) :purpose :daily-use :consent? true}
+          secret "ghp_shared_token"
+          _ (run actor {:op :item/create :item-id "sh" :compartment "work"
+                        :plaintext (.getBytes secret "UTF-8")} owner)
+          _ (run actor {:op :share/grant :item-id "sh" :recipient-did rdid} owner)
+          grant (first (store/grants-of st "sh"))
+          it    (store/item st "sh")
+          ;; 受信者: 自分の hybrid 秘密鍵で envelope から DEK を復元 → block を復号
+          dek   (crypto/accept-share cr (:secret rkp) (:grant/envelope grant))
+          pt    (crypto/open-item cr dek (:item/nonce it)
+                                  (store/block-get st (:item/cid it))
+                                  (vault/item-aad "sh"))]
+      (is (= rdid (:grant/recipient grant)))
+      (is (= secret (String. ^bytes pt "UTF-8")) "受信者が PQC envelope から平文を復元"))))
 
 (deftest high-value-escalates-not-commits
   (testing "高価値カテゴリの reveal は自動 commit されず escalate(承認待ち)"

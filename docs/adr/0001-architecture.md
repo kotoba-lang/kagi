@@ -13,8 +13,9 @@
    index/ACL/grant/envelope/version は Datomic graph(CACAO-gated)、台帳はハッシュ鎖 append-only。
 4. **actor**: langgraph-clj StateGraph。intake→authn→advise→govern→decide→{reveal|write|share|rotate|hold}。
    単一不変条件「Governor が拒否する 開示/書込/共有/鍵操作/認証 を kagi は決して行わない」を位相で保証。
-5. **注入境界(swap)**: Store(`:db-api` MemStore≡KotobaStore)・Crypto Provider(JVM BouncyCastle ‖ WASM
-   kotoba-crypto Rust)・Phase(0→3) を差し替えてもコア不変。contract test で等価保証。
+5. **注入境界(swap)**: Store(`:db-api` MemStore≡KotobaStore)・Crypto Provider(JVM=JDK24 標準
+   ML-KEM-768/ML-DSA-65 + BouncyCastle Argon2id ‖ WASM=kotoba-crypto Rust)・Phase(0→3) を
+   差し替えてもコア不変。contract test で等価保証。
 6. **identity**: `itonami/cacao.clj` 継承。Ed25519 did:key/IPNS は不変、ML-DSA を加法。秘密鍵は
    `.kagi/identity.edn`(gitignore)。
 

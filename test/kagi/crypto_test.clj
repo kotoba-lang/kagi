@@ -37,3 +37,52 @@
           b (crypto/hkdf p ikm (byte-array 0) (.getBytes "b" "UTF-8") 32)]
       (is (= (seq a) (seq a2)))
       (is (not= (seq a) (seq b))))))
+
+(deftest hybrid-kem-roundtrip
+  (testing "X25519+ML-KEM-768 hybrid: encap の shared を decap が一致復元"
+    (let [p (crypto/jvm-provider)
+          {:keys [public secret]} (crypto/kem-keypair p)
+          {:keys [ciphertext shared]} (crypto/kem-encap p public)
+          shared2 (crypto/kem-decap p secret ciphertext)]
+      (is (= 32 (count shared)))
+      (is (= (seq shared) (seq shared2)) "両者の shared secret が一致")))
+  (testing "別鍵で decap すると shared が一致しない(ML-KEM は implicit rejection で例外を投げず別値を返す)"
+    (let [p (crypto/jvm-provider)
+          a (crypto/kem-keypair p)
+          b (crypto/kem-keypair p)
+          {:keys [ciphertext shared]} (crypto/kem-encap p (:public a))
+          wrong (crypto/kem-decap p (:secret b) ciphertext)]
+      (is (not= (seq shared) (seq wrong)) "誤鍵 decap の shared は正規 shared と異なる"))))
+
+(deftest hybrid-share-dek-roundtrip
+  (testing "share-dek → accept-share で DEK が受信者だけ復元できる"
+    (let [p (crypto/jvm-provider)
+          {:keys [public secret]} (crypto/kem-keypair p)
+          dek (crypto/rand-bytes p 32)
+          env (crypto/share-dek p public dek)
+          dek2 (crypto/accept-share p secret env)]
+      (is (= (seq dek) (seq dek2))))))
+
+(deftest hybrid-signature-roundtrip-and-tamper
+  (testing "Ed25519+ML-DSA-65 hybrid: 正署名は verify、改竄/片側破損は reject"
+    (let [p (crypto/jvm-provider)
+          {:keys [public secret]} (crypto/sign-keypair p)
+          msg (.getBytes "commit:item:gh:v1" "UTF-8")
+          sig (crypto/sign* p secret msg)]
+      (is (true? (crypto/verify* p public msg sig)) "両署名 valid → true")
+      (is (false? (crypto/verify* p public (.getBytes "tampered" "UTF-8") sig)) "msg 改竄 → false")
+      (is (false? (crypto/verify* p public msg (assoc sig :mldsa (byte-array (count (:mldsa sig))))))
+          "片側(ML-DSA)破損 → false(両方必須)"))))
+
+(deftest argon2id-deterministic
+  (testing "Argon2id は同入力で決定的、salt で分岐(軽量パラメータでテスト)"
+    (let [p (crypto/jvm-provider)
+          pass (.getBytes "correct horse battery staple" "UTF-8")
+          salt (crypto/rand-bytes p 16)
+          prm {:m-kb 8192 :t 1 :p 1}
+          k1 (crypto/argon2id p pass salt prm)
+          k2 (crypto/argon2id p pass salt prm)
+          k3 (crypto/argon2id p pass (crypto/rand-bytes p 16) prm)]
+      (is (= 32 (count k1)))
+      (is (= (seq k1) (seq k2)))
+      (is (not= (seq k1) (seq k3))))))

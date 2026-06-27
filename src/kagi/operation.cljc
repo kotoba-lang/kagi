@@ -35,38 +35,72 @@
 
 ;; ───────── 副作用(:effect ノードからのみ) ─────────
 
+(defn- item-dek
+  "owner が VMK から compartment KEK を導出し item の wrap を解いて DEK を得る。"
+  [_store* crypto* context it]
+  (let [kek (crypto/compartment-key crypto* (:vmk context) (:item/compartment it))]
+    [kek (crypto/unwrap-dek crypto* kek (:item/wrap it))]))
+
 (defn- do-effect
   "op を実際に実行する。ここだけが store を変更し item を復号開示する。"
-  [store* crypto* request context proposal]
+  [store* crypto* request context _proposal]
   (case (:op request)
-    :item/create
+    (:item/create :item/update)
     (let [{:keys [item-id compartment plaintext]} request
-          vmk (:vmk context)
-          aad (vault/item-aad item-id)
+          prev (store/item store* item-id)
+          comp (or compartment (:item/compartment prev))
+          aad  (vault/item-aad item-id)
           {:keys [dek nonce ciphertext]} (crypto/seal-item crypto* plaintext aad)
-          kek (crypto/compartment-key crypto* vmk compartment)
-          cid (str "cid:" item-id)]
+          kek  (crypto/compartment-key crypto* (:vmk context) comp)
+          ver  (inc (:item/version prev 0))
+          cid  (str "cid:" item-id ":v" ver)]
       (store/block-put! store* cid ciphertext)
-      (store/put-item! store* #:item{:id item-id :compartment compartment
-                                     :cid cid :nonce nonce :version 1
+      (store/put-item! store* #:item{:id item-id :compartment comp
+                                     :cid cid :nonce nonce :version ver
                                      :wrap (crypto/wrap-dek crypto* kek dek)
                                      :created-by (:did context)})
-      {:effect :stored :item item-id})
+      {:effect :stored :item item-id :version ver})
 
     :item/reveal
     (let [{:keys [item-id]} request
           it  (store/item store* item-id)
-          vmk (:vmk context)
-          kek (crypto/compartment-key crypto* vmk (:item/compartment it))
-          dek (crypto/unwrap-dek crypto* kek (:item/wrap it))
+          [_ dek] (item-dek store* crypto* context it)
           pt  (crypto/open-item crypto* dek (:item/nonce it)
                                 (store/block-get store* (:item/cid it))
                                 (vault/item-aad item-id))]
       {:effect :revealed :item item-id :plaintext pt :purpose (:purpose context)})
 
-    ;; share/rotate は PQC KEM を要する(provider 段階導入)。governor/phase が高価値を
-    ;; escalate に回すため、ここに来るのは承認済みケース。
-    (throw (ex-info "op の副作用は段階導入" {:op (:op request) :proposal proposal}))))
+    :item/rotate
+    (let [{:keys [item-id]} request
+          it  (store/item store* item-id)
+          aad (vault/item-aad item-id)
+          [kek dek] (item-dek store* crypto* context it)
+          pt  (crypto/open-item crypto* dek (:item/nonce it)
+                                (store/block-get store* (:item/cid it)) aad)
+          {ndek :dek nnonce :nonce nct :ciphertext} (crypto/seal-item crypto* pt aad)
+          ver (inc (:item/version it 1))
+          ncid (str "cid:" item-id ":v" ver)]
+      (store/block-put! store* ncid nct)
+      (store/put-item! store* (assoc it :item/cid ncid :item/nonce nnonce
+                                     :item/version ver
+                                     :item/wrap (crypto/wrap-dek crypto* kek ndek)))
+      {:effect :rotated :item item-id :version ver})
+
+    :share/grant
+    (let [{:keys [item-id recipient-did]} request
+          it  (store/item store* item-id)
+          [_ dek] (item-dek store* crypto* context it)
+          rpk (:member/kem-pub (store/member store* recipient-did))
+          env (crypto/share-dek crypto* rpk dek)]
+      (store/put-grant! store* #:grant{:id (str item-id "->" recipient-did)
+                                       :item item-id :recipient recipient-did
+                                       :envelope env :cap :member})
+      {:effect :shared :item item-id :to recipient-did})
+
+    :share/revoke
+    (let [{:keys [item-id recipient-did]} request]
+      (store/revoke-grant! store* (str item-id "->" recipient-did))
+      {:effect :revoked :item item-id :to recipient-did})))
 
 ;; ───────── グラフ ─────────
 
