@@ -14,6 +14,8 @@
          {:local/root "../../com-junkawasaki/langchain-clj"}}}
   ;; clojure -M:dev:run  → drive the demo ops through one VaultActor
   :run {:main-opts ["-m" "kagi.sim"]}
+  ;; clojure -M:dev:cli <cmd>  → op 相当の CLI(vault は ./.kagi)。bin/kagi も参照。
+  :cli {:main-opts ["-m" "kagi.cli"]}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
