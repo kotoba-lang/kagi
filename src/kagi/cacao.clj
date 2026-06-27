@@ -11,6 +11,7 @@
            [java.security.spec X509EncodedKeySpec]
            [java.io ByteArrayOutputStream]
            [java.util Base64]
+           [java.time Instant]
            [java.math BigInteger]))
 
 ;; ───────── pure SIWE builders (mirror of kotoba.cacao / itonami) ─────────
@@ -145,10 +146,13 @@
     (.encodeToString (Base64/getEncoder) (cbor-bytes (->wire payload sig-b64)))))
 
 (defn verify
-  "自己発行 cacao を検証 → {:ok? :iss :aud :resources}。SIWE を再構成し iss(did:key)から
-   公開鍵を復元して Ed25519 署名を検証する。opts {:aud} を渡すと audience も照合。"
+  "自己発行 cacao を検証 → {:ok? :iss :aud :resources :expired? :replay?}。SIWE を再構成し
+   iss(did:key)から公開鍵を復元して Ed25519 署名を検証する。opts:
+     :aud         — 照合する audience(省略可)
+     :now         — 現在時刻 ISO 文字列(省略時は実時刻)。expiry を過ぎていれば reject
+     :nonce-seen? — (fn [nonce] bool) 既出 nonce なら true → リプレイとして reject"
   ([cacao-b64] (verify cacao-b64 nil))
-  ([cacao-b64 {:keys [aud]}]
+  ([cacao-b64 {:keys [aud now nonce-seen?]}]
    (try
      (let [wire (first (cbor-read (.decode (Base64/getDecoder) ^String cacao-b64) 0))
            p    (get wire "p")
@@ -160,7 +164,13 @@
            msg  (siwe-message payload)
            pub  (did-key->public (:iss payload))
            sig-ok? (ed-verify? pub (.getBytes ^String msg "UTF-8") sigb)
-           aud-ok? (or (nil? aud) (= aud (:aud payload)))]
-       {:ok? (boolean (and sig-ok? aud-ok?))
-        :iss (:iss payload) :aud (:aud payload) :resources (:resources payload)})
+           aud-ok? (or (nil? aud) (= aud (:aud payload)))
+           exp-ok? (if-let [exp (:expiry payload)]
+                     (let [now* (if now (Instant/parse now) (Instant/now))]
+                       (not (.isAfter now* (Instant/parse exp))))
+                     true)
+           replay? (boolean (and nonce-seen? (nonce-seen? (:nonce payload))))]
+       {:ok? (boolean (and sig-ok? aud-ok? exp-ok? (not replay?)))
+        :iss (:iss payload) :aud (:aud payload) :resources (:resources payload)
+        :expired? (not exp-ok?) :replay? replay?})
      (catch Exception e {:ok? false :error (.getMessage e)}))))

@@ -9,8 +9,7 @@
   (testing "actor が自分の鍵で mint した CACAO を verify が通す(iss=自 did)"
     (let [id  (identity/generate-identity)
           tok (cacao/mint id {:cap :cap/transact :scope (:graph id)}
-                          {:aud "https://kotobase.net" :nonce "n1"
-                           :issued-at "2026-06-27T00:00:00Z" :expiry "2026-06-27T01:00:00Z"})
+                          {:aud "https://kotobase.net" :nonce "n1"})
           r   (cacao/verify tok {:aud "https://kotobase.net"})]
       (is (:ok? r))
       (is (= (:did id) (:iss r)))
@@ -32,6 +31,26 @@
           tok (cacao/mint id {:cap :cap/read :scope (:graph id)} {:aud "https://a" :nonce "n"})]
       (is (true?  (:ok? (cacao/verify tok {:aud "https://a"}))))
       (is (false? (:ok? (cacao/verify tok {:aud "https://evil"})))))))
+
+(deftest expired-token-rejected
+  (testing "expiry を過ぎた CACAO は :now 照合で reject(期限内は ok)"
+    (let [id  (identity/generate-identity)
+          tok (cacao/mint id {:cap :cap/read :scope (:graph id)}
+                          {:aud "u" :nonce "n" :issued-at "2026-06-27T00:00:00Z"
+                           :expiry "2026-06-27T01:00:00Z"})]
+      (is (true? (:ok? (cacao/verify tok {:now "2026-06-27T00:30:00Z"}))))
+      (let [r (cacao/verify tok {:now "2026-06-27T02:00:00Z"})]
+        (is (false? (:ok? r)))
+        (is (:expired? r))))))
+
+(deftest replayed-nonce-rejected
+  (testing "既出 nonce はリプレイとして reject"
+    (let [id  (identity/generate-identity)
+          tok (cacao/mint id {:cap :cap/read :scope (:graph id)} {:aud "u" :nonce "n-123"})]
+      (is (true? (:ok? (cacao/verify tok))))
+      (let [r (cacao/verify tok {:nonce-seen? #{"n-123"}})]
+        (is (false? (:ok? r)))
+        (is (:replay? r))))))
 
 (deftest forged-issuer-fails
   (testing "別人の鍵で署名し iss を被害者 did に詐称しても、iss から復元した鍵で検証され落ちる"
