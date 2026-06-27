@@ -19,6 +19,7 @@
             [kagi.governor :as governor]
             [kagi.phase :as phase]
             [kagi.crypto :as crypto]
+            [kagi.ledger :as ledger]
             [kagi.vault :as vault]
             [kagi.store :as store]))
 
@@ -106,7 +107,7 @@
 
 (defn build
   "VaultActor グラフを store に束ねてコンパイル。"
-  [store* & [{:keys [advisor crypto checkpointer]
+  [store* & [{:keys [advisor crypto checkpointer signer]
               :or {advisor      (advisor/mock-advisor)
                    crypto       (crypto/bc-provider)
                    checkpointer (cp/mem-checkpointer)}}]]
@@ -151,14 +152,16 @@
       (g/add-node :effect
                   (fn [{:keys [request context proposal]}]
                     (let [r (do-effect store* crypto request context proposal)
-                          f (commit-fact request context)]
-                      (store/append-ledger! store* f)
-                      {:result r :audit [f]})))
+                          f (commit-fact request context)
+                          e (ledger/make-entry (store/ledger store*) f crypto signer)]
+                      (store/append-ledger! store* e)
+                      {:result r :audit [e]})))
       (g/add-node :hold
                   (fn [{:keys [request context verdict audit]}]
                     (let [hf (or (last (filter #(#{:policy-hold} (:t %)) audit))
-                                 (hold-fact request context verdict))]
-                      (store/append-ledger! store* hf)
+                                 (hold-fact request context verdict))
+                          e  (ledger/make-entry (store/ledger store*) hf crypto signer)]
+                      (store/append-ledger! store* e)
                       {:result {:effect :held}})))
       (g/set-entry-point :intake)
       (g/add-edge :intake :authn)

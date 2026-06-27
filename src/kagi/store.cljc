@@ -37,13 +37,9 @@
   (revoke-grant! [s gid] (swap! a assoc-in [:grants gid :grant/revoked] true) s)
   (block-get [_ cid] (get-in @a [:blocks cid]))
   (block-put! [s cid bytes] (swap! a assoc-in [:blocks cid] bytes) s)
-  (append-ledger! [_ fact]
-    (let [prev (last (:ledger @a))
-          seq* (count (:ledger @a))
-          entry (assoc fact :ledger/seq seq*
-                       :ledger/prev-hash (:ledger/hash prev))]
-      (swap! a update :ledger (fnil conj []) entry)
-      entry)))
+  ;; entry は kagi.ledger/make-entry が seq/prev-hash/hash/sig を付けた完成形を渡す。
+  ;; store は append-only の保管のみ担う(改竄検知のロジックは ledger ns)。
+  (append-ledger! [_ entry] (swap! a update :ledger (fnil conj []) entry) entry))
 
 (defn mem-store
   ([] (mem-store {}))

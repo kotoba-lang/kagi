@@ -52,8 +52,12 @@ clojure -M:dev:run        # デモ
 ```
 
 > **状態**: JVM provider(`jvm-provider`)は **実 PQC を配線済み** — JDK 24 標準の
-> ML-KEM-768 / ML-DSA-65、X25519/Ed25519/AES-256-GCM、BouncyCastle Argon2id。hybrid KEM
-> 往復・hybrid 署名(片側破損 reject)・PQC 共有(share→accept)・Argon2id を contract test で検証
-> （15 tests / 32 assertions pass）。CLJS/WASM provider(kotoba-crypto Rust)と、kotoba-server
-> 実 backend(`KotobaStore`)・SealedBlockStore 配線は段階導入。
+> ML-KEM-768 / ML-DSA-65、X25519/Ed25519/AES-256-GCM、BouncyCastle Argon2id。さらに:
+> - **hybrid identity**(`kagi.identity`): Ed25519 authority(did:key/IPNS graph) + ML-DSA-65 共同署名。
+> - **改竄検知台帳**(`kagi.ledger`): ハッシュ鎖 + entry ごとの hybrid 署名、`verify-chain` で検証。
+> - actor が `:signer` 付きで commit/hold を全署名し、`verify-chain` で鎖検証(end-to-end test)。
+>
+> 検証: **20 tests / 45 assertions pass**(KEM 往復・署名 tamper reject・PQC 共有・Argon2id・
+> 台帳の hash/sig 改竄検知)。CLJS/WASM provider(kotoba-crypto Rust)と kotoba-server 実 backend
+> (`KotobaStore` XRPC)・SealedBlockStore 配線は段階導入。
 > 秘密鍵は `.kagi/identity.edn`（gitignore）。git に絶対コミットしない。

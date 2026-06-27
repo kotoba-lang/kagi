@@ -5,6 +5,8 @@
             [kagi.operation :as op]
             [kagi.store :as store]
             [kagi.vault :as vault]
+            [kagi.ledger :as ledger]
+            [kagi.identity :as identity]
             [kagi.crypto :as crypto]))
 
 (defn- fresh []
@@ -50,6 +52,25 @@
                  (assoc owner :purpose :seed))
           rv (run actor {:op :item/reveal :item-id "k3"} owner)]
       (is (= :held (get-in rv [:result :effect]))))))
+
+(deftest actor-produces-verifiable-signed-ledger
+  (testing "actor を :signer 付きで動かすと、commit/hold 全てが hybrid 署名され鎖検証できる"
+    (let [cr (crypto/jvm-provider)
+          id (identity/generate-identity)
+          st (store/mem-store {:members {(:did id) #:member{:did (:did id) :role :owner}}})
+          actor (op/build st {:crypto cr :signer (identity/sign-secret id)})
+          owner {:did (:did id) :role :owner :phase 1
+                 :vmk (crypto/rand-bytes cr 32) :purpose :daily-use}
+          _ (run actor {:op :item/create :item-id "a" :compartment "work"
+                        :plaintext (.getBytes "x" "UTF-8")} owner)
+          _ (run actor {:op :item/reveal :item-id "a"} owner)
+          _ (run actor {:op :item/reveal :item-id "a"}
+                 {:did "did:key:zV" :role :viewer :phase 1 :purpose :audit}) ; → hold
+          led (store/ledger st)]
+      (is (= 3 (count led)) "commit, commit, hold の 3 fact")
+      (is (every? :ledger/sig led) "全て hybrid 署名済み")
+      (is (:ok? (ledger/verify-chain led cr (constantly (identity/sign-public id))))
+          "actor 生成の台帳が改竄検知チェーンとして verify"))))
 
 (deftest pqc-share-end-to-end
   (testing "owner が共有 → 受信者が hybrid KEM grant envelope を decap して平文を復元"

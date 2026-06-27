@@ -2,7 +2,9 @@
   "Store contract。MemStore で検証し、同じ deftest を KotobaStore(:db-api 配線後)へ
   再利用する(MemStore ≡ KotobaStore)。"
   (:require [clojure.test :refer [deftest testing is]]
-            [kagi.store :as store]))
+            [kagi.store :as store]
+            [kagi.ledger :as ledger]
+            [kagi.crypto :as crypto]))
 
 (defn- exercise [st]
   (store/put-item! st #:item{:id "a" :compartment "c" :cid "cid:a" :version 1})
@@ -19,11 +21,14 @@
       (is (true? (:grant/revoked (first (store/grants-of st "a"))))))))
 
 (deftest ledger-is-append-only-hash-chained
-  (testing "append-ledger! は seq を採番し prev-hash で前 fact に連結する"
+  (testing "ledger/make-entry が seq を採番し prev-hash で前 fact に連結、store は append のみ"
     (let [st (store/mem-store)
-          _ (store/append-ledger! st {:t :committed :op :item/create})
-          _ (store/append-ledger! st {:t :policy-hold :op :item/reveal})
-          l (store/ledger st)]
+          p  (crypto/jvm-provider)
+          e0 (ledger/make-entry (store/ledger st) {:t :committed :op :item/create} p nil)
+          _  (store/append-ledger! st e0)
+          e1 (ledger/make-entry (store/ledger st) {:t :policy-hold :op :item/reveal} p nil)
+          _  (store/append-ledger! st e1)
+          l  (store/ledger st)]
       (is (= [0 1] (mapv :ledger/seq l)))
       (is (= (:ledger/hash (first l)) (:ledger/prev-hash (second l)))
           "2 番目の prev-hash は 1 番目の hash を指す"))))

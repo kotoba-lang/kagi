@@ -7,9 +7,13 @@
   秘密鍵(Ed25519 + ML-DSA + KEM)は `.kagi/identity.edn` に永続し **git に絶対コミット
   しない**(.gitignore)。"
   (:require [clojure.edn :as edn])
-  (:import [java.security KeyPairGenerator KeyFactory]
+  (:import [java.security KeyPairGenerator KeyFactory Key]
            [java.security.spec PKCS8EncodedKeySpec X509EncodedKeySpec]
            [java.util Base64]))
+
+(defn- enc ^bytes [^Key k] (.getEncoded k))
+(defn- b64 ^String [^bytes b] (.encodeToString (Base64/getEncoder) b))
+(defn- unb64 ^bytes [^String s] (.decode (Base64/getDecoder) s))
 
 (def ^:private b58 "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 
@@ -53,16 +57,29 @@
     (str "k" (base36 cid))))
 
 (defn generate-identity
-  "fresh Ed25519 identity {:private-key :public-key :did :graph + b64}。
-   hybrid 署名用 ML-DSA-65 / KEM 鍵は crypto Provider 経由で別途生成し merge する
-   (`:mldsa-public-b64` `:kem-public-b64` を graph に publish)。"
+  "fresh hybrid identity。Ed25519 が **authority**(did:key/IPNS graph、kotoba 不変)で、
+   ML-DSA-65 を vault commit/台帳の **hybrid 共同署名** として加法的に併発行する
+   (`:mldsa-public-b64` は graph に publish)。KEM 受信鍵は別途 crypto provider で生成。"
   []
   (let [kp  (.generateKeyPair (KeyPairGenerator/getInstance "Ed25519"))
-        pub (.getPublic kp)]
+        pub (.getPublic kp)
+        ml  (.generateKeyPair (KeyPairGenerator/getInstance "ML-DSA-65"))]
     {:private-key (.getPrivate kp) :public-key pub
      :did (did-key pub) :graph (ipns-name pub)
-     :private-b64 (.encodeToString (Base64/getEncoder) (.getEncoded (.getPrivate kp)))
-     :public-b64  (.encodeToString (Base64/getEncoder) (.getEncoded pub))}))
+     :private-b64 (b64 (enc (.getPrivate kp)))
+     :public-b64  (b64 (enc pub))
+     :mldsa-private-b64 (b64 (enc (.getPrivate ml)))
+     :mldsa-public-b64  (b64 (enc (.getPublic ml)))}))
+
+(defn sign-secret
+  "crypto provider の `sign*` に渡す秘密 bundle {:ed <pkcs8> :mldsa <pkcs8>}。"
+  [{:keys [private-b64 mldsa-private-b64]}]
+  {:ed (unb64 private-b64) :mldsa (unb64 mldsa-private-b64)})
+
+(defn sign-public
+  "`verify*` / graph publish 用の公開 bundle {:ed <x509> :mldsa <x509>}。"
+  [{:keys [public-b64 mldsa-public-b64]}]
+  {:ed (unb64 public-b64) :mldsa (unb64 mldsa-public-b64)})
 
 (defn load-identity [{:keys [private-b64 public-b64] :as m}]
   (let [kf (KeyFactory/getInstance "Ed25519")
