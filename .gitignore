@@ -1,0 +1,9 @@
+# actor secret material — NEVER commit (Ed25519 + ML-DSA + KEM private keys)
+.kagi/
+*identity.edn
+
+# clojure / tooling
+.cpcache/
+.clj-kondo/.cache/
+target/
+.nrepl-port
