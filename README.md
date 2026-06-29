@@ -53,15 +53,64 @@ bin/kagi ls                           # item 一覧（復号しない）
 bin/kagi rotate gh-token              # DEK を回転（再封緘、平文は不変）
 bin/kagi log                          # 監査台帳を検証して表示（hybrid 署名 + ハッシュ鎖）
 bin/kagi whoami                       # 自分の did:key / IPNS graph
+bin/kagi identity-migrate             # identity 秘密鍵を Apple Keychain へ移す
+bin/kagi unlock-enable-keychain       # VMK unlock を Apple Keychain に追加
+bin/kagi unlock-status                # unlock envelope metadata を表示
 ```
 
 - `bin/kagi` は `clojure -M:dev:cli` のラッパ（PQC は JDK24 標準 provider を使うため bb 不可）。
-- master passphrase は環境変数 **`KAGI_MASTER`** か端末プロンプト。
+- master passphrase は環境変数 **`KAGI_MASTER`** か端末プロンプト。`unlock-enable-keychain`
+  後は device-local OS keychain unlock を先に試し、passphrase は recovery として残す。
 - 保存先は実行ディレクトリの **`./.kagi/`**（gitignore）:
   - `identity.edn` — Ed25519/ML-DSA 鍵 + KEM 受信鍵
   - `vault.edn` — **暗号文 item + wrap 済み鍵 + 台帳のみ**（平文・素の VMK は出ない。
     unlock = passphrase→Argon2id(256MiB)→KEK→VMK 復号）
 - `op` 対応: `op item get` → `kagi get` / `op item create` → `kagi add` / `op item list` → `kagi ls`。
+
+### identity key custody
+
+新規 vault で identity 秘密鍵を Apple Keychain に置く:
+
+```bash
+KAGI_IDENTITY_STORE=keychain bin/kagi init
+```
+
+既存 `.kagi/identity.edn` から秘密鍵部分を Apple Keychain に移す:
+
+```bash
+bin/kagi identity-migrate
+```
+
+移行後の `identity.edn` は公開鍵束と `keychain://...` ref だけを持つ。secret 値や秘密鍵は
+stdout / log / manimani GUI に出さない。
+
+### device unlock custody
+
+master passphrase を端末に保存しない。代わりに、kagi はランダムな device unlock secret を
+Apple Keychain に保存し、その secret から HKDF した KEK で VMK を追加 wrap する。
+
+```bash
+bin/kagi unlock-enable-keychain
+bin/kagi unlock-status
+```
+
+`unlock-enable-keychain` は一度だけ master passphrase で vault を開き、`.kagi/vault.edn`
+の `:unlock/wraps` に OS-keychain envelope を追加する。以後の `bin/kagi copy/get/add/...`
+は `KAGI_MASTER` が無い場合、keychain unlock を試してから passphrase prompt に fallback する。
+
+Passkey / WebAuthn PRF は同じ envelope 形式で追加予定:
+
+```edn
+{:method :passkey-prf
+ :rp-id "manimani.local"
+ :credential-id "..."
+ :salt #bytes "..."
+ :nonce #bytes "..."
+ :wrapped #bytes "..."}
+```
+
+通常の passkey 署名鍵を取り出すのではなく、WebAuthn PRF output を HKDF して VMK unwrap
+KEK にする。PRF 非対応環境では OS keychain unlock と passphrase recovery を使う。
 
 ## 開発
 
