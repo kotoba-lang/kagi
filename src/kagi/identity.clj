@@ -7,7 +7,8 @@
   秘密鍵(Ed25519 + ML-DSA + KEM)は `.kagi/identity.edn` に永続し **git に絶対コミット
   しない**(.gitignore)。"
   (:require [clojure.edn :as edn]
-            [kagi.crypto :as crypto])
+            [kagi.crypto :as crypto]
+            [kagi.secret-store :as secret-store])
   (:import [java.security KeyPairGenerator KeyFactory Key]
            [java.security.spec PKCS8EncodedKeySpec X509EncodedKeySpec]
            [java.util Base64]))
@@ -107,22 +108,58 @@
 
 (defn load-identity [{:keys [private-b64 public-b64] :as m}]
   (let [kf (KeyFactory/getInstance "Ed25519")
-        priv (.generatePrivate kf (PKCS8EncodedKeySpec. (.decode (Base64/getDecoder) private-b64)))
         pub  (.generatePublic kf (X509EncodedKeySpec. (.decode (Base64/getDecoder) public-b64)))]
-    (merge m {:private-key priv :public-key pub :did (did-key pub) :graph (ipns-name pub)})))
+    (cond-> (merge m {:public-key pub :did (did-key pub) :graph (ipns-name pub)})
+      private-b64 (assoc :private-key
+                         (.generatePrivate kf (PKCS8EncodedKeySpec.
+                                                (.decode (Base64/getDecoder) private-b64)))))))
+
+(def secret-fields #{:private-b64 :mldsa-private-b64 :kem-secret})
+(def public-fields #{:public-b64 :mldsa-public-b64 :kem-public})
+
+(defn split-identity [id]
+  {:public (select-keys id public-fields)
+   :secret (select-keys id secret-fields)})
+
+(defn secret-backed-identity? [m]
+  (and (:secret-ref m)
+       (not (:private-b64 m))))
+
+(defn load-secret-backed-identity [m secret-store]
+  (let [secret (secret-store/get-edn secret-store (:secret-ref m))]
+    (load-identity (merge m secret))))
+
+(defn migrate-identity-secret!
+  "Move secret key material from an identity map into SecretStore.
+
+  Returns the public identity map that should be written to identity.edn."
+  [path id secret-store secret-ref]
+  (let [{:keys [public secret]} (split-identity id)
+        public* (assoc public :secret-ref secret-ref :secret-provider :secret-store)]
+    (secret-store/put-edn! secret-store secret-ref secret)
+    (spit path (pr-str public*))
+    public*))
 
 (defn load-or-create-identity!
   "per-actor 鍵を `path`(.kagi/identity.edn) から読込、無ければ生成→永続(b64 のみ保存)。
    provider を渡すと hybrid KEM 受信鍵も生成・永続する。"
   ([path] (load-or-create-identity! path nil))
-  ([path provider]
+  ([path provider] (load-or-create-identity! path provider nil))
+  ([path provider {:keys [secret-store secret-ref]}]
    (let [f (java.io.File. ^String path)]
      (if (.exists f)
-       (load-identity (edn/read-string (slurp f)))
+       (let [m (edn/read-string (slurp f))]
+         (if (secret-backed-identity? m)
+           (load-secret-backed-identity
+            m
+            (or secret-store (secret-store/store-for-ref (:secret-ref m))))
+           (load-identity m)))
        (let [id (generate-identity provider)
              parent (.getParentFile (.getAbsoluteFile f))]
          (when parent (.mkdirs parent))
-         (spit f (pr-str (select-keys id [:private-b64 :public-b64
-                                          :mldsa-private-b64 :mldsa-public-b64
-                                          :kem-public :kem-secret])))
+         (if (and secret-store secret-ref)
+           (migrate-identity-secret! path id secret-store secret-ref)
+           (spit f (pr-str (select-keys id [:private-b64 :public-b64
+                                            :mldsa-private-b64 :mldsa-public-b64
+                                            :kem-public :kem-secret]))))
          id)))))
