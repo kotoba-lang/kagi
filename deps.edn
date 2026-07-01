@@ -4,14 +4,13 @@
  ;; (ML-KEM-768 / ML-DSA-65 / SLH-DSA) are provided on the JVM by BouncyCastle via
  ;; JCA; Ed25519 + AES-256-GCM come from the JDK. CLJS/WASM uses the kotoba-crypto
  ;; Rust provider instead (see src/kagi/crypto.cljc :: Provider seam).
- :deps {io.github.com-junkawasaki/langgraph-clj
-        {:local/root "../../com-junkawasaki/langgraph-clj"}
-        org.bouncycastle/bcprov-jdk18on {:mvn/version "1.78.1"}}
+ :deps {io.github.kotoba-lang/langgraph
+        {:local/root "../langgraph"}}
  :aliases
  {;; offline workspace dev — pin transitive langchain-clj to local checkout
   :dev {:override-deps
-        {io.github.com-junkawasaki/langchain-clj
-         {:local/root "../../com-junkawasaki/langchain-clj"}}}
+        {io.github.kotoba-lang/langchain
+         {:local/root "../langchain"}}}
   ;; clojure -M:dev:run  → drive the demo ops through one VaultActor
   :run {:main-opts ["-m" "kagi.sim"]}
   ;; clojure -M:dev:cli <cmd>  → op 相当の CLI(vault は ./.kagi)。bin/kagi も参照。

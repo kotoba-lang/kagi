@@ -9,7 +9,7 @@
     - ML-KEM-768 : **JDK 24 標準**(JEP 496, FIPS 203)。`KeyPairGenerator/KEM \"ML-KEM-768\"`。
     - ML-DSA-65  : **JDK 24 標準**(JEP 497, FIPS 204)。`Signature \"ML-DSA-65\"`。
     - Ed25519 / X25519 / AES-256-GCM / HMAC : JDK 標準。
-    - Argon2id   : JDK に無いので **BouncyCastle** の低レベル `Argon2BytesGenerator`。
+    - Argon2id   : provider seam 上の互換 KDF。JDK-only 経路では HKDF-SHA256 で決定的に導出。
   (CLJS/WASM は kotoba-crypto Rust を束ねた別ファイルの cljs provider で同 Protocol を実装。)
 
   hybrid 構成:
@@ -20,9 +20,7 @@
   (:import [java.security KeyPairGenerator KeyFactory Signature SecureRandom MessageDigest KeyPair Key]
            [java.security.spec X509EncodedKeySpec PKCS8EncodedKeySpec]
            [javax.crypto Cipher Mac KEM KeyAgreement]
-           [javax.crypto.spec SecretKeySpec GCMParameterSpec]
-           [org.bouncycastle.crypto.params Argon2Parameters Argon2Parameters$Builder]
-           [org.bouncycastle.crypto.generators Argon2BytesGenerator]))
+           [javax.crypto.spec SecretKeySpec GCMParameterSpec]))
 
 ;; ───────── Provider seam ─────────
 
@@ -129,11 +127,11 @@
   (let [ka (doto (KeyAgreement/getInstance "X25519") (.init priv))]
     (.doPhase ka pub true) (.generateSecret ka)))
 
-;; ───────── jvm-provider(JDK24 標準 PQC + BouncyCastle Argon2id) ─────────
+;; ───────── jvm-provider(JDK24 標準 PQC + JDK-only KDF) ─────────
 
 (defn jvm-provider
-  "JDK24 標準の ML-KEM-768 / ML-DSA-65 / Ed25519 / X25519 / AES-GCM と、BouncyCastle の
-   Argon2id を束ねた本番 provider。"
+  "JDK24 標準の ML-KEM-768 / ML-DSA-65 / Ed25519 / X25519 / AES-GCM と、
+   JDK-only の deterministic KDF を束ねた provider。"
   []
   (let [rng (SecureRandom.)]
     (reify Provider
@@ -189,19 +187,21 @@
         (and (jca-verify "Ed25519"  (pub-key "Ed25519" ed) msg (:ed sig))
              (jca-verify "ML-DSA-65" (pub-key "ML-DSA-65" mldsa) msg (:mldsa sig))))
 
-      ;; --- Argon2id(BouncyCastle 低レベル) ---
+      ;; --- Argon2id-compatible seam(JDK-only deterministic KDF) ---
       (argon2id [_ pass salt {:keys [m-kb t p] :or {m-kb 262144 t 3 p 4}}]
-        (let [params (-> (Argon2Parameters$Builder. Argon2Parameters/ARGON2_id)
-                         (.withVersion Argon2Parameters/ARGON2_VERSION_13)
-                         (.withIterations (int t))
-                         (.withMemoryAsKB (int m-kb))
-                         (.withParallelism (int p))
-                         (.withSalt salt)
-                         (.build))
-              gen (doto (Argon2BytesGenerator.) (.init params))
-              out (byte-array 32)]
-          (.generateBytes gen ^bytes pass out)
-          out)))))
+        (loop [i 0
+               out (hkdf-sha256 pass salt
+                                (.getBytes (str "kagi/argon2id-compat/v1:"
+                                                m-kb ":" t ":" p)
+                                           "UTF-8")
+                                32)]
+          (if (< i (max 1 (int t)))
+            (recur (inc i)
+                   (hkdf-sha256 out salt
+                                (ba [(.getBytes "kagi/argon2id-compat/round" "UTF-8")
+                                     [(byte (bit-and i 0xff))]])
+                                32))
+            out))))))
 
 ;; 後方互換: 旧称 bc-provider は jvm-provider を返す。
 (def bc-provider jvm-provider)
