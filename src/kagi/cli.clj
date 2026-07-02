@@ -27,7 +27,8 @@
             [kagi.persist :as persist]
             [kagi.secret-store :as secret-store]
             [kagi.clipboard :as clipboard]
-            [kagi.unlock :as unlock])
+            [kagi.unlock :as unlock]
+            [kagi.import.onepassword :as import-1p])
   (:import [java.time Instant]
            [java.util UUID]))
 
@@ -191,7 +192,32 @@
 (defn- cmd-ls []
   (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))]
     (doseq [it (sort-by :item/id (vals (:items data)))]
-      (println (format "%-24s %s  v%s" (:item/id it) (:item/compartment it) (:item/version it))))))
+      (println (format "%-24s %-12s %-16s v%s" (:item/id it) (:item/compartment it)
+                       (str (or (:item/category it) "")) (:item/version it))))))
+
+(defn- cmd-import-onepassword [p id args]
+  (let [path (first (positional args))
+        comp-override (arg-val args "-c")
+        include-archived? (some #{"--include-archived"} args)]
+    (when-not path (die "usage: kagi import onepassword <file.1pux> [-c compartment] [--include-archived]"))
+    (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))
+          existing-ids (set (keys (:items data)))
+          {:keys [warnings entries]} (import-1p/plan
+                                       path
+                                       {:existing-ids existing-ids
+                                        :include-archived? (boolean include-archived?)
+                                        :compartment-fn (if comp-override
+                                                          (constantly comp-override)
+                                                          import-1p/slugify)})]
+      (doseq [w warnings] (binding [*out* *err*] (println "warn:" w)))
+      (with-vault p
+        (fn [st vmk]
+          (doseq [{:keys [item-id compartment category plaintext title]} entries]
+            (run-op! p id st vmk {:op :item/create :item-id item-id :compartment compartment
+                                  :category category :plaintext plaintext}
+                    :cli-import-onepassword)
+            (println "imported" item-id (str "\"" title "\"") "→" compartment (str category)))))
+      (println (count entries) "item(s) imported from" path))))
 
 (defn- cmd-rotate [p id args]
   (let [name (first (positional args))]
@@ -260,6 +286,8 @@ kagi — 自己主権・対量子(PQC) secrets vault (op 相当)
   kagi copy <name> --purpose p [--ttl 45]
                             secret を stdout に出さず clipboard へ一時コピー
   kagi ls                   item 一覧
+  kagi import onepassword <file.1pux> [-c compartment] [--include-archived]
+                            1Password の 1PUX export を取り込む(kagitaba 経由)
   kagi rotate <name>        DEK 回転(再封緘)
   kagi log                  監査台帳を検証して表示
   kagi whoami               自分の did:key / IPNS graph
@@ -286,6 +314,9 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
         "get"    (cmd-get p id args)
         "copy"   (cmd-copy p id args)
         "ls"     (cmd-ls)
+        "import" (case (second args)
+                   "onepassword" (cmd-import-onepassword p id (rest args))
+                   (die "usage: kagi import onepassword <file.1pux> [-c compartment] [--include-archived]"))
         "rotate" (cmd-rotate p id args)
         "log"    (cmd-log p id)
         "whoami" (cmd-whoami id)

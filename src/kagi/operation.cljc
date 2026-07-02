@@ -48,16 +48,17 @@
   [store* crypto* request context _proposal]
   (case (:op request)
     (:item/create :item/update)
-    (let [{:keys [item-id compartment plaintext]} request
+    (let [{:keys [item-id compartment category plaintext]} request
           prev (store/item store* item-id)
           comp (or compartment (:item/compartment prev))
+          cat  (or category (:item/category prev))
           aad  (vault/item-aad item-id)
           {:keys [dek nonce ciphertext]} (crypto/seal-item crypto* plaintext aad)
           kek  (crypto/compartment-key crypto* (:vmk context) comp)
           ver  (inc (:item/version prev 0))
           cid  (str "cid:" item-id ":v" ver)]
       (store/block-put! store* cid ciphertext)
-      (store/put-item! store* #:item{:id item-id :compartment comp
+      (store/put-item! store* #:item{:id item-id :compartment comp :category cat
                                      :cid cid :nonce nonce :version ver
                                      :wrap (crypto/wrap-dek crypto* kek dek)
                                      :created-by (:did context)})

@@ -9,6 +9,7 @@
 (def schema
   {:item/id          {:db/unique :db.unique/identity}
    :item/compartment {}
+   :item/category    {}                       ; 任意: kagitaba.category の正準 keyword(非機微、平文index)
    :item/title-enc   {}                       ; 任意: 暗号化タイトル(base64)
    :item/cid         {}                       ; SealedBlockStore content id
    :item/nonce       {}                       ; AES-GCM nonce(base64)
