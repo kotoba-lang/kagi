@@ -5,7 +5,11 @@
  ;; JCA; Ed25519 + AES-256-GCM come from the JDK. CLJS/WASM uses the kotoba-crypto
  ;; Rust provider instead (see src/kagi/crypto.cljc :: Provider seam).
  :deps {io.github.kotoba-lang/langgraph
-        {:local/root "../langgraph"}}
+        {:local/root "../langgraph"}
+        ;; 1Password 互換 keychain データモデル + 1PUX import(crypto/store 非依存、
+        ;; ADR-2607023000)。kagi は kagitaba item を pr-str して DEK 封緘パイプラインに通す。
+        io.github.kotoba-lang/kagitaba
+        {:local/root "../kagitaba"}}
  :aliases
  {;; offline workspace dev — pin transitive langchain-clj to local checkout
   :dev {:override-deps
