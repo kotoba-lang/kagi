@@ -7,6 +7,8 @@
   秘密鍵(Ed25519 + ML-DSA + KEM)は `.kagi/identity.edn` に永続し **git に絶対コミット
   しない**(.gitignore)。"
   (:require [clojure.edn :as edn]
+            [ed25519.core :as ed25519]
+            [ipns.core :as ipns]
             [kagi.crypto :as crypto]
             [kagi.secret-store :as secret-store])
   (:import [java.security KeyPairGenerator KeyFactory Key]
@@ -19,46 +21,21 @@
 (defn- b64-map [m] (into {} (map (fn [[k v]] [k (b64 v)])) m))
 (defn- unb64-map [m] (into {} (map (fn [[k v]] [k (unb64 v)])) m))
 
-(def ^:private b58 "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
-
-(defn- base58btc [^bytes data]
-  (let [zeros (count (take-while zero? data))
-        sb (StringBuilder.) k (java.math.BigInteger/valueOf 58)]
-    (loop [n (java.math.BigInteger. 1 data)]
-      (when (pos? (.signum n))
-        (.append sb (.charAt b58 (.intValue (.mod n k))))
-        (recur (.divide n k))))
-    (dotimes [_ zeros] (.append sb \1))
-    (.toString (.reverse sb))))
-
-(def ^:private b36 "0123456789abcdefghijklmnopqrstuvwxyz")
-
-(defn- base36 [^bytes data]
-  (let [sb (StringBuilder.) k (java.math.BigInteger/valueOf 36)]
-    (loop [n (java.math.BigInteger. 1 data)]
-      (when (pos? (.signum n))
-        (.append sb (.charAt b36 (.intValue (.mod n k))))
-        (recur (.divide n k))))
-    (.toString (.reverse sb))))
-
 (defn- raw-pub ^bytes [pub]
   (let [enc (.getEncoded pub)]
     (java.util.Arrays/copyOfRange enc (- (alength enc) 32) (alength enc))))
 
+;; did:key + IPNS-name derivation delegated to kotoba-lang/ed25519 and
+;; kotoba-lang/ipns (ADR-2607050100) — this used to be a private
+;; BigInteger-based reimplementation.
+
 (defn- did-key [pub]
-  ;; multicodec ed25519-pub = 0xED 0x01, then raw key; base58btc; 'z' multibase.
-  (let [framed (byte-array (concat [(unchecked-byte 0xED) (unchecked-byte 0x01)]
-                                   (seq (raw-pub pub))))]
-    (str "did:key:z" (base58btc framed))))
+  (ed25519/did-key-from-pub (raw-pub pub)))
 
 (defn- ipns-name
   "actor の graph = 鍵由来 libp2p-key IPNS 名(`k51…`)。鍵を持つことが graph の authority。"
   [pub]
-  (let [raw (raw-pub pub)
-        pb  (byte-array (map unchecked-byte (concat [0x08 0x01 0x12 0x20] (seq raw))))
-        mh  (byte-array (map unchecked-byte (concat [0x00 (alength pb)] (seq pb))))
-        cid (byte-array (map unchecked-byte (concat [0x01 0x72] (seq mh))))]
-    (str "k" (base36 cid))))
+  (ipns/pubkey->name (raw-pub pub)))
 
 (defn generate-identity
   "fresh hybrid identity。Ed25519 が **authority**(did:key/IPNS graph、kotoba 不変)で、
