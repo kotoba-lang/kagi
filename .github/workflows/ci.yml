@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: git clone --depth 1 https://github.com/kotoba-lang/langgraph.git ../langgraph
+      - run: git clone --depth 1 https://github.com/kotoba-lang/kagitaba.git ../kagitaba
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
