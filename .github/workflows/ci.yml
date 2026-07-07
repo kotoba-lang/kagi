@@ -14,7 +14,11 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          # kagi.crypto's hybrid ML-KEM-768/ML-DSA-65 support needs the
+          # JDK 24 standard KeyPairGenerator/KEM/Signature providers
+          # (JEP 496/497, FIPS 203/204) -- JDK 21 throws
+          # NoSuchAlgorithmException for both.
+          java-version: '24'
       - uses: DeLaGuardo/setup-clojure@13.4
         with:
           cli: latest
