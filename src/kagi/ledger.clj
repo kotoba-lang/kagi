@@ -41,7 +41,12 @@
 
 (defn verify-chain
   "ledger 全体を検証 → {:ok? :broken-at}。各 entry で (1)hash 再計算一致 (2)prev-hash 連結
-  (3)sig があれば actor の公開鍵で hybrid verify。pub-of: actor-did → {:ed :mldsa} 公開 bundle。"
+  (3)sig があれば actor の公開鍵で hybrid verify。pub-of: actor-did → {:ed :mldsa} 公開 bundle。
+  entry に :ledger/sig が無い場合、pub-of がその actor の公開鍵を解決できなければ
+  (= 一度も署名鍵を持たなかった actor)未署名として許容するが、pub-of が鍵を返すなら
+  (= 署名できる/した actor)欠落は「元は署名されていたが後から剥がされた」改竄とみなし
+  検知する — 単なる欠落有無だけを見ると、entry 内容/hash/prev-hash に一切触れずに
+  :ledger/sig だけ dissoc する改竄を素通りさせてしまうため。"
   [ledger provider pub-of]
   (loop [prev-h (byte-array 0) prev-b64 nil i 0 items ledger]
     (if-let [e (first items)]
@@ -55,7 +60,7 @@
                                (try (crypto/verify* provider pub h
                                                     {:ed (unb64 ed) :mldsa (unb64 mldsa)})
                                     (catch Exception _ false)))))
-                       true)]
+                       (nil? (pub-of (:actor e))))]
         (if (and hash-ok? link-ok? sig-ok?)
           (recur h (:ledger/hash e) (inc i) (rest items))
           {:ok? false :broken-at i

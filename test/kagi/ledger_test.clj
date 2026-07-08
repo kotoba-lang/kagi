@@ -49,6 +49,23 @@
       (is (false? (:ok? r)))
       (is (= :sig (:why r))))))
 
+(deftest stripped-signature-on-a-signed-entry-is-detected
+  (testing "an attacker who dissoc's :ledger/sig from an otherwise-signed
+            entry (touching neither fact content nor hash/prev-hash) must
+            not slip past verify-chain just because a missing signature is
+            tolerated for actors with no registered key"
+    (let [p  (crypto/jvm-provider)
+          id (identity/generate-identity)
+          pub-of (constantly (identity/sign-public id))
+          led (build p (identity/sign-secret id)
+                     [{:t :committed :op :item/create :actor (:did id)}
+                      {:t :committed :op :item/reveal :actor (:did id)}])
+          stripped (update led 1 dissoc :ledger/sig)
+          r (ledger/verify-chain stripped p pub-of)]
+      (is (false? (:ok? r)))
+      (is (= 1 (:broken-at r)))
+      (is (= :sig (:why r))))))
+
 (deftest unsigned-chain-still-hash-verifies
   (testing "signer 無し(未署名)でもハッシュ鎖は検証できる"
     (let [p (crypto/jvm-provider)
