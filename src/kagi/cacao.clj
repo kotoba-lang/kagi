@@ -6,13 +6,12 @@
 
   SIWE/wire ビルダは `kotoba.cacao` の byte-exact 純関数の写し(同期して保つ)。crypto は
   JDK Ed25519 + 最小 CBOR(definite-length)。"
-  (:require [clojure.string :as str])
-  (:import [java.security Signature KeyFactory]
-           [java.security.spec X509EncodedKeySpec]
+  (:require [clojure.string :as str]
+            [ed25519.core :as ed25519])
+  (:import [java.security Signature]
            [java.io ByteArrayOutputStream]
            [java.util Base64]
-           [java.time Instant]
-           [java.math BigInteger]))
+           [java.time Instant]))
 
 ;; ───────── pure SIWE builders (mirror of kotoba.cacao / itonami) ─────────
 
@@ -94,35 +93,15 @@
             [acc p]))
       (throw (ex-info "cbor: unsupported major" {:major major})))))
 
-;; ───────── base58btc encode/decode + did:key ─────────
-
-(def ^:private b58 "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
-
-(defn- base58-decode ^bytes [^String s]
-  (let [ones (count (take-while #(= % \1) s))
-        n (reduce (fn [^BigInteger acc ch]
-                    (.add (.multiply acc (BigInteger/valueOf 58))
-                          (BigInteger/valueOf (.indexOf b58 (str ch)))))
-                  BigInteger/ZERO (seq s))
-        raw (.toByteArray n)
-        raw (if (and (> (alength raw) 1) (zero? (aget raw 0)))
-              (java.util.Arrays/copyOfRange raw 1 (alength raw)) raw)
-        out (byte-array (+ ones (alength raw)))]
-    (System/arraycopy raw 0 out ones (alength raw))
-    out))
-
-(def ^:private ed25519-spki-prefix
-  ;; SubjectPublicKeyInfo header for Ed25519: 302a300506032b6570032100
-  (byte-array (map unchecked-byte [0x30 0x2a 0x30 0x05 0x06 0x03 0x2b 0x65 0x70 0x03 0x21 0x00])))
+;; ───────── did:key → public key ─────────
 
 (defn did-key->public
-  "did:key:z… (Ed25519) → java PublicKey。multicodec 0xED01 を剥がし X.509 SPKI に包む。"
+  "did:key:z… (Ed25519) → java PublicKey. Delegates raw-key extraction to the
+  canonical kotoba-lang/ed25519 implementation (base58btc decode + multicodec
+  0xED01 verification + exact-length check), replacing this repo's own former
+  copy-pasted decoder that never checked the multicodec byte-type."
   [iss]
-  (let [mb     (subs iss (count "did:key:z"))
-        framed (base58-decode mb)                                 ; 0xED 0x01 ‖ raw32
-        raw    (java.util.Arrays/copyOfRange framed 2 (alength framed))
-        spki   (byte-array (concat (seq ed25519-spki-prefix) (seq raw)))]
-    (.generatePublic (KeyFactory/getInstance "Ed25519") (X509EncodedKeySpec. spki))))
+  (ed25519/public-from-raw (ed25519/did-key->pubkey iss)))
 
 ;; ───────── Ed25519 ─────────
 
