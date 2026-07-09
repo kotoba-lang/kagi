@@ -2,7 +2,8 @@
   "自己発行 CACAO の mint→verify 往復・改竄検知・audience 照合。"
   (:require [clojure.test :refer [deftest testing is]]
             [kagi.cacao :as cacao]
-            [kagi.identity :as identity])
+            [kagi.identity :as identity]
+            [ed25519.core :as ed25519])
   (:import [java.util Base64]))
 
 (deftest mint-verify-roundtrip
@@ -51,6 +52,29 @@
       (let [r (cacao/verify tok {:nonce-seen? #{"n-123"}})]
         (is (false? (:ok? r)))
         (is (:replay? r))))))
+
+(deftest non-ed25519-did-key-rejected
+  (testing "did:key の multicodec が 0xED01(Ed25519)でない場合、did-key->public は例外を
+            投げ、verify は :ok? false で fail-closed する(黙って別鍵種別のバイト列を
+            Ed25519 公開鍵として受理してはいけない)"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 ;; 0xEC01 = X25519 multicodec, not Ed25519 -- forged via ed25519.core's
+                 ;; own base58btc encoder so this is a genuinely well-formed did:key,
+                 ;; just of the wrong key type.
+                 (cacao/did-key->public
+                  (str "did:key:z"
+                       (ed25519/b58
+                        (byte-array (concat [(unchecked-byte 0xec) (unchecked-byte 0x01)]
+                                            (repeat 32 (unchecked-byte 0)))))))))
+    (let [id (identity/generate-identity)
+          non-ed25519-did (str "did:key:z"
+                               (ed25519/b58
+                                (byte-array (concat [(unchecked-byte 0xec) (unchecked-byte 0x01)]
+                                                    (repeat 32 (unchecked-byte 0))))))
+          tok (cacao/mint {:private-key (:private-key id) :did non-ed25519-did}
+                          {:cap :cap/read :scope (:graph id)} {:aud "u" :nonce "n"})]
+      (is (false? (:ok? (cacao/verify tok)))
+          "verify must fail-closed (not throw uncaught) when iss is a wrongly-typed did:key"))))
 
 (deftest forged-issuer-fails
   (testing "別人の鍵で署名し iss を被害者 did に詐称しても、iss から復元した鍵で検証され落ちる"
