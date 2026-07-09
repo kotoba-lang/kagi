@@ -39,3 +39,26 @@
           b (byte-array [1 2 3])]
       (store/block-put! st "cid:x" b)
       (is (= (seq b) (seq (store/block-get st "cid:x")))))))
+
+(deftest append-chained-ledger-survives-real-concurrent-writers
+  (testing "append-chained-ledger! (not a separate `(ledger s)` read +
+            make-entry + append-ledger!, which kagi.operation used to do)
+            must not let two concurrent writers compute the same
+            :ledger/seq/:ledger/prev-hash from a stale snapshot -- that
+            would make verify-chain flag two perfectly legitimate,
+            non-tampered entries as a broken hash chain, indistinguishable
+            from real tampering. Verified with genuine JVM threads, not a
+            sequential simulation."
+    (let [st (store/mem-store)
+          n  50
+          futs (doall (for [i (range n)]
+                        (future
+                          (store/append-chained-ledger!
+                           st #(ledger/make-entry % {:t (keyword (str "fact-" i))} nil nil)))))]
+      (doseq [f futs] @f)
+      (let [l (store/ledger st)]
+        (is (= n (count l)))
+        (is (= n (count (distinct (map :ledger/seq l))))
+            "every concurrent writer got a distinct seq -- none silently collided")
+        (is (:ok? (ledger/verify-chain l nil (constantly nil)))
+            "the hash chain is intact under real thread contention")))))
