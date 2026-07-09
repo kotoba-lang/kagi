@@ -167,15 +167,21 @@
                   (fn [{:keys [request context proposal]}]
                     (let [r (do-effect store* crypto request context proposal)
                           f (commit-fact request context)
-                          e (ledger/make-entry (store/ledger store*) f crypto signer)]
-                      (store/append-ledger! store* e)
+                          ;; append-chained-ledger! (not a separate
+                          ;; store/ledger read + make-entry + append-ledger!)
+                          ;; so the :ledger/seq/:ledger/prev-hash the entry
+                          ;; chains onto is always the CURRENT ledger, even
+                          ;; under concurrent :effect/:hold calls -- see
+                          ;; kagi.store's append-chained-ledger! docstring.
+                          e (store/append-chained-ledger!
+                             store* #(ledger/make-entry % f crypto signer))]
                       {:result r :audit [e]})))
       (g/add-node :hold
                   (fn [{:keys [request context verdict audit]}]
                     (let [hf (or (last (filter #(#{:policy-hold} (:t %)) audit))
-                                 (hold-fact request context verdict))
-                          e  (ledger/make-entry (store/ledger store*) hf crypto signer)]
-                      (store/append-ledger! store* e)
+                                 (hold-fact request context verdict))]
+                      (store/append-chained-ledger!
+                       store* #(ledger/make-entry % hf crypto signer))
                       {:result {:effect :held}})))
       (g/set-entry-point :intake)
       (g/add-edge :intake :authn)
