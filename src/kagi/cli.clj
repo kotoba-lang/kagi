@@ -399,4 +399,7 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
         "pull"   (cmd-pull id args)
         "sync"   (cmd-sync id args)
         (help))))
-  (flush))
+  (flush)
+  ;; futures (clipboard/process slurps) leave non-daemon pool threads alive;
+  ;; without this the JVM lingers ~60s after the command completes.
+  (shutdown-agents))
