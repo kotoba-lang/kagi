@@ -17,12 +17,18 @@
       (is (= "https://kotobase.net" (:aud r))))))
 
 (deftest tampered-signature-fails
-  (testing "署名 byte を 1 bit 反転すると verify が落ちる"
+  (testing "CBOR byte を 1 bit 反転すると verify が落ちる(署名 or payload の改竄検知)"
+    ;; NOTE: the CBOR is canonical dag-cbor (map keys sorted length-then-bytewise
+    ;; for the live kotobase.net edge), so the signature is NOT the trailing
+    ;; bytes ("s" < "t" inside the {t,s} sig map). Flip a byte in the middle of
+    ;; the token — it lands in the payload or signature region either way, and
+    ;; both are covered by the Ed25519 verify (payload corruption changes the
+    ;; reconstructed SIWE message; signature corruption fails directly).
     (let [id  (identity/generate-identity)
           tok (cacao/mint id {:cap :cap/read :scope (:graph id)} {:aud "u" :nonce "n"})
           raw (.decode (Base64/getDecoder) tok)
-          _   (aset-byte raw (dec (alength raw))
-                         (unchecked-byte (bit-xor (aget raw (dec (alength raw))) 1)))
+          i   (quot (alength raw) 2)
+          _   (aset-byte raw i (unchecked-byte (bit-xor (aget raw i) 1)))
           bad (.encodeToString (Base64/getEncoder) raw)]
       (is (false? (:ok? (cacao/verify bad)))))))
 
