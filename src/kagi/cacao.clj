@@ -8,17 +8,70 @@
   JDK Ed25519 + 最小 CBOR(definite-length)。"
   (:require [clojure.string :as str]
             [ed25519.core :as ed25519])
-  (:import [java.security Signature]
+  (:import [java.security Signature MessageDigest]
            [java.io ByteArrayOutputStream]
+           [java.lang StringBuilder]
            [java.util Base64]
            [java.time Instant]))
+
+;; ───────── canonical graph CID (mirror of kotobase.cid, via tsumugu port) ─────────
+;; The kotobase.net edge does NOT address a tenant by its raw IPNS name — it
+;; recomputes the graph handle as CIDv1/dag-cbor/sha2-256 of
+;; "kotobase/db/<did>/<db-name>" and pins THAT into every write/read. Scope
+;; kagi-sync CACAOs to this canonical graph, like the live tsumugu / app-aozora.
+
+(def ^:private b32 "abcdefghijklmnopqrstuvwxyz234567")
+
+(defn- sha256 ^bytes [^bytes data]
+  (.digest (MessageDigest/getInstance "SHA-256") data))
+
+(defn- base32-lower-no-pad
+  "CIDv1 base32-lower, no padding. Ported from kotobase.cid (via tsumugu.cacao)."
+  [^bytes data]
+  (let [sb (StringBuilder.)
+        {:keys [bits value]}
+        (reduce
+         (fn [{:keys [bits value]} b]
+           (let [b (bit-and (int b) 0xff)
+                 value (bit-or (bit-shift-left value 8) b)
+                 bits (+ bits 8)]
+             (loop [bits bits value value]
+               (if (>= bits 5)
+                 (do (.append sb (.charAt b32 (bit-and (unsigned-bit-shift-right value (- bits 5)) 31)))
+                     (recur (- bits 5) value))
+                 {:bits bits :value value}))))
+         {:bits 0 :value 0}
+         data)]
+    (when (pos? bits)
+      (.append sb (.charAt b32 (bit-and (bit-shift-left value (- 5 bits)) 31))))
+    (.toString sb)))
+
+(defn graph-cid-from-name
+  "SHA-256(name) behind a CIDv1/dag-cbor/sha2-256 header (0x01 0x71 0x12 0x20),
+  base32-lower 'b'. Ported from kotobase.cid/graph-cid-from-name."
+  [^String name]
+  (let [hash (sha256 (.getBytes name "UTF-8"))
+        cid  (byte-array (concat [(unchecked-byte 0x01) (unchecked-byte 0x71)
+                                  (unchecked-byte 0x12) (unchecked-byte 0x20)]
+                                 (seq hash)))]
+    (str "b" (base32-lower-no-pad cid))))
+
+(defn canonical-graph
+  "The deterministic graph CID the kotobase.net edge recomputes from did +
+  db-name on every write/read. Scope kagi-sync CACAOs to THIS, not the IPNS name."
+  [did db-name]
+  (graph-cid-from-name (str "kotobase/db/" did "/" db-name)))
 
 ;; ───────── pure SIWE builders (mirror of kotoba.cacao / itonami) ─────────
 
 (def ^:private cap->op {:cap/read "datom:read" :cap/transact "datom:transact" :cap/admin "tx:create"})
 
 (defn grant->resources [{:keys [cap scope]}]
-  [(str "kotoba://op/" (cap->op cap)) (str "kotoba://graph/" scope)])
+  ;; Every kotobase.net CACAO must carry the mandatory kotobase:pin capability
+  ;; alongside the request op and graph scope (net-kotobase edge_cacao).
+  ["kotoba://op/kotobase:pin"
+   (str "kotoba://op/" (cap->op cap))
+   (str "kotoba://graph/" scope)])
 
 (defn grant->payload [grant {:keys [iss aud nonce issued-at expiry domain version statement]
                              :or {domain "com.junkawasaki.kagi" version "1"}}]
@@ -61,10 +114,22 @@
                         (.write o (int (bit-and n 0xff))))
         :else (throw (ex-info "cbor len too big" {:n n}))))
 
+;; dag-cbor canonical map-key order: by UTF-8 byte length ascending, then
+;; bytewise. The kotobase.net edge decodes with strict @ipld/dag-cbor, which
+;; REJECTS non-canonical maps — so key order here is load-bearing for the live
+;; edge even though it never affects the SIWE signature (that's over the message
+;; string, not the CBOR envelope).
+(defn- dag-cbor-key-order [ks]
+  (sort-by (fn [k] (let [b (.getBytes ^String (name k) "UTF-8")]
+                     [(alength b) (vec b)]))
+           ks))
+
 (defn- cbor-val [^ByteArrayOutputStream o v]
   (cond
     (string? v)     (let [b (.getBytes ^String v "UTF-8")] (cbor-head o 3 (alength b)) (.write o b 0 (alength b)))
-    (map? v)        (do (cbor-head o 5 (count v)) (doseq [[k vv] v] (cbor-val o (name k)) (cbor-val o vv)))
+    (map? v)        (do (cbor-head o 5 (count v))
+                        (doseq [k (dag-cbor-key-order (keys v))]
+                          (cbor-val o (name k)) (cbor-val o (get v k))))
     (sequential? v) (do (cbor-head o 4 (count v)) (doseq [x v] (cbor-val o x)))
     :else           (cbor-val o (str v))))
 
@@ -123,6 +188,37 @@
         sig     (ed-sign private-key (.getBytes ^String msg "UTF-8"))
         sig-b64 (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) sig)]
     (.encodeToString (Base64/getEncoder) (cbor-bytes (->wire payload sig-b64)))))
+
+;; ── kotobase.net-specific CACAO (byte-exact to the proven-live cloud-murakumo
+;; queue_kotoba minter) ──────────────────────────────────────────────────────
+;; The LIVE kotobase.net edge is the kotobase-cf-wasm worker, whose
+;; required-capability does an EXACT hardcoded match on the single resource
+;; "kotoba://can/kotobase:pin" — NOT the op/graph-parameterized scheme — and it
+;; wants domain "kotobase.net", aud "did:web:kotobase.net", and NO "h" wire
+;; field. `.q` reads and `.transact`/`.fold` writes both gate on this.
+
+(def kotobase-pin-resource "kotoba://can/kotobase:pin")
+(def kotobase-operator-did "did:web:kotobase.net")
+
+(defn- ->kotobase-wire [payload sig-b64]
+  {"p" (cond-> {"iss" (:iss payload) "aud" (:aud payload) "iat" (:issued-at payload)
+                "nonce" (:nonce payload) "domain" (:domain payload)
+                "version" (:version payload) "resources" (:resources payload)}
+         (:expiry payload) (assoc "exp" (:expiry payload)))
+   "s" {"t" "EdDSA" "s" (or sig-b64 "")}})
+
+(defn mint-kotobase
+  "Mint a CACAO the live kotobase.net worker accepts. id = {:private-key :did};
+  opts {:aud :nonce :issued-at :expiry}. aud defaults to did:web:kotobase.net."
+  [{:keys [private-key did]} {:keys [aud nonce issued-at expiry]}]
+  (let [payload {:iss did :aud (or aud kotobase-operator-did)
+                 :nonce nonce :issued-at issued-at :expiry expiry
+                 :domain "kotobase.net" :version "1"
+                 :resources [kotobase-pin-resource]}
+        msg     (siwe-message payload)
+        sig     (ed-sign private-key (.getBytes ^String msg "UTF-8"))
+        sig-b64 (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) sig)]
+    (.encodeToString (Base64/getEncoder) (cbor-bytes (->kotobase-wire payload sig-b64)))))
 
 (defn verify
   "自己発行 cacao を検証 → {:ok? :iss :aud :resources :expired? :replay?}。SIWE を再構成し

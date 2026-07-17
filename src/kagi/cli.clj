@@ -28,11 +28,49 @@
             [kagi.secret-store :as secret-store]
             [kagi.clipboard :as clipboard]
             [kagi.unlock :as unlock]
+            [kagi.sync :as sync]
             [kagi.import.onepassword :as import-1p])
   (:import [java.time Instant]
            [java.util UUID]))
 
-(def ^:private dir ".kagi")
+;; Vault home resolution (ADR-2607170500). The vault MUST NOT live in a repo
+;; checkout / per-agent worktree: those get cleaned, re-cloned, or clobbered by
+;; concurrent sessions — which is exactly how the fleet signing keys were lost
+;; (2026-07-16). Resolution order:
+;;   1. $KAGI_HOME               — explicit override
+;;   2. ~/.kagi                  — canonical, stable across checkouts (default)
+;;   3. ./.kagi (legacy in-repo) — read-only fallback, one-time auto-migrated
+;;      to the canonical home on first use so nothing is silently lost.
+(def ^:private legacy-dir ".kagi")
+
+(defn- home-dir []
+  (or (not-empty (System/getenv "KAGI_HOME"))
+      (str (System/getProperty "user.home") "/.kagi")))
+
+(defn- migrate-legacy!
+  "One-time: if the canonical home has no vault but a legacy ./.kagi vault
+  exists, COPY it up (not move — a concurrent session may still hold the legacy
+  checkout) so the canonical home becomes authoritative without data loss."
+  [home]
+  (let [home-vault   (java.io.File. (str home "/vault.edn"))
+        legacy-vault (java.io.File. (str legacy-dir "/vault.edn"))]
+    (when (and (not (.exists home-vault)) (.exists legacy-vault))
+      (.mkdirs (java.io.File. ^String home))
+      (doseq [f ["vault.edn" "identity.edn"]]
+        (let [src (java.io.File. (str legacy-dir "/" f))]
+          (when (.exists src)
+            (java.nio.file.Files/copy (.toPath src)
+                                      (.toPath (java.io.File. (str home "/" f)))
+                                      (into-array java.nio.file.CopyOption
+                                                  [java.nio.file.StandardCopyOption/COPY_ATTRIBUTES])))))
+      (binding [*out* *err*]
+        (println "kagi: migrated legacy ./.kagi vault ->" home
+                 "(canonical). The in-repo ./.kagi is now deprecated; its copy remains untouched.")))))
+
+(def ^:private dir
+  (let [h (home-dir)]
+    (migrate-legacy! h)
+    h))
 (def ^:private id-path (str dir "/identity.edn"))
 (def ^:private vault-path (str dir "/vault.edn"))
 (def ^:private aud "https://kotobase.net")
@@ -123,7 +161,14 @@
 ;; ───────── commands ─────────
 
 (defn- cmd-init [p id]
-  (when (persist/load* vault-path) (die "vault already exists at" vault-path))
+  ;; Guard against clobbering an existing vault OR silently orphaning items
+  ;; behind a fresh identity (a re-init mints a new did:key → new graph →
+  ;; the previous vault's items become unreachable even if the file survives).
+  ;; This is the failure mode that lost the fleet keys on 2026-07-16.
+  (when (persist/load* vault-path)
+    (die (str "vault already exists at " vault-path
+              " — refusing to re-init (would orphan existing items). "
+              "To start over, move it aside explicitly first.")))
   (let [pass (passphrase true)
         {:keys [meta]} (new-vmk-meta p pass)
         st (load-store {})]
@@ -276,6 +321,28 @@
   (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))]
     (println (pr-str (unlock/status (:meta data))))))
 
+;; ───────── cloud sync (kotobase.net) ─────────
+
+(defn- cmd-push [id args]
+  (when-not (persist/load* vault-path) (die "no vault — run: kagi init"))
+  (let [pod (not-empty (arg-val args "--pod"))
+        r (sync/push! {:id id :vault-path vault-path :pod pod})]
+    (println (pr-str (assoc r :ok? true :secret? false)))))
+
+(defn- cmd-pull [id args]
+  (let [pod (not-empty (arg-val args "--pod"))
+        r (sync/pull! {:id id :vault-path vault-path :pod pod})]
+    (if (:seq r)
+      (println (pr-str (assoc r :ok? true :backup (str vault-path ".bak") :secret? false)))
+      (die "cloud has no vault snapshot for this graph yet — run: kagi push"))))
+
+(defn- cmd-sync [id args]
+  (let [pod (not-empty (arg-val args "--pod"))
+        pulled (try (sync/pull! {:id id :vault-path vault-path :pod pod})
+                    (catch Exception _ {:seq nil}))
+        pushed (sync/push! {:id id :vault-path vault-path :pod pod})]
+    (println (pr-str {:ok? true :pulled (:seq pulled) :pushed (:seq pushed) :secret? false}))))
+
 (defn- help []
   (println (str/trim "
 kagi — 自己主権・対量子(PQC) secrets vault (op 相当)
@@ -295,11 +362,16 @@ kagi — 自己主権・対量子(PQC) secrets vault (op 相当)
   kagi unlock-enable-keychain [--ref keychain://service/account]
                             VMK unlock を OS keychain に追加(passphrase は recovery として残す)
   kagi unlock-status        VMK unlock methods を metadata のみ表示
+  kagi push [--pod URL]     暗号化 vault を kotobase.net へ同期(cloud 永続化)
+  kagi pull [--pod URL]     cloud の vault を取得(現ローカルは .bak に退避)
+  kagi sync [--pod URL]     pull(あれば)→ push。iCloud Keychain 型 E2E 同期
 
 passphrase は環境変数 KAGI_MASTER か端末プロンプト。
 KAGI_UNLOCK_REF=keychain://... で device unlock ref を指定。
 KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に保存。
-鍵/vault は ./.kagi/(gitignore)。")))
+鍵/vault は $KAGI_HOME(既定 ~/.kagi)。repo checkout の外なので checkout/worktree
+の掃除・再clone・並行セッションで壊れない(ADR-2607170500)。旧 ./.kagi があれば
+初回に ~/.kagi へ自動移行(copy)する。")))
 
 (defn -main [& args]
   (if (or (empty? args)
@@ -323,5 +395,8 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
         "identity-migrate" (cmd-identity-migrate p id args)
         "unlock-enable-keychain" (cmd-unlock-enable-keychain p id args)
         "unlock-status" (cmd-unlock-status)
+        "push"   (cmd-push id args)
+        "pull"   (cmd-pull id args)
+        "sync"   (cmd-sync id args)
         (help))))
   (flush))
