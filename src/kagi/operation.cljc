@@ -19,8 +19,10 @@
             [kagi.governor :as governor]
             [kagi.phase :as phase]
             [kagi.crypto :as crypto]
+            [kagi.key-registry :as key-registry]
             [kagi.cacao :as cacao]
             [kagi.ledger :as ledger]
+            [kagi.rotation :as rotation]
             [kagi.vault :as vault]
             [kagi.store :as store]))
 
@@ -43,6 +45,25 @@
   (let [kek (crypto/compartment-key crypto* (:vmk context) (:item/compartment it))]
     [kek (crypto/unwrap-dek crypto* kek (:item/wrap it))]))
 
+(defn- rotate-item-plan
+  [store* crypto* context it]
+  (let [item-id (:item/id it)
+        aad (vault/item-aad item-id)
+        [kek dek] (item-dek store* crypto* context it)
+        pt (crypto/open-item crypto* dek (:item/nonce it)
+                             (store/block-get store* (:item/cid it)) aad)
+        {ndek :dek nnonce :nonce nct :ciphertext} (crypto/seal-item crypto* pt aad)
+        ver (inc (:item/version it 1))
+        ncid (str "cid:" item-id ":v" ver)
+        next-item (assoc it :item/cid ncid :item/nonce nnonce
+                        :item/version ver :item/key-epoch ver
+                        :item/key-created-at (:now context)
+                        :item/wrap (crypto/wrap-dek crypto* kek ndek))]
+    {:block {:cid ncid :bytes nct}
+     :item next-item :dek ndek :version ver
+     :from-key (:item/cid it) :to-key ncid
+     :parent (:item/rotation-event it)}))
+
 (defn- do-effect
   "op を実際に実行する。ここだけが store を変更し item を復号開示する。"
   [store* crypto* request context _proposal]
@@ -60,6 +81,8 @@
       (store/block-put! store* cid ciphertext)
       (store/put-item! store* #:item{:id item-id :compartment comp :category cat
                                      :cid cid :nonce nonce :version ver
+                                     :key-epoch ver
+                                     :key-created-at (:now context)
                                      :wrap (crypto/wrap-dek crypto* kek dek)
                                      :created-by (:did context)})
       {:effect :stored :item item-id :version ver})
@@ -75,25 +98,17 @@
 
     :item/rotate
     (let [{:keys [item-id]} request
-          it  (store/item store* item-id)
-          aad (vault/item-aad item-id)
-          [kek dek] (item-dek store* crypto* context it)
-          pt  (crypto/open-item crypto* dek (:item/nonce it)
-                                (store/block-get store* (:item/cid it)) aad)
-          {ndek :dek nnonce :nonce nct :ciphertext} (crypto/seal-item crypto* pt aad)
-          ver (inc (:item/version it 1))
-          ncid (str "cid:" item-id ":v" ver)]
-      (store/block-put! store* ncid nct)
-      (store/put-item! store* (assoc it :item/cid ncid :item/nonce nnonce
-                                     :item/version ver
-                                     :item/wrap (crypto/wrap-dek crypto* kek ndek)))
-      {:effect :rotated :item item-id :version ver})
+          plan (rotate-item-plan store* crypto* context (store/item store* item-id))]
+      {:effect :rotated :item item-id :version (:version plan)
+       :rekey-plan (assoc plan :grants [])})
 
     :share/grant
     (let [{:keys [item-id recipient-did]} request
           it  (store/item store* item-id)
           [_ dek] (item-dek store* crypto* context it)
-          rpk (:member/kem-pub (store/member store* recipient-did))
+          recipient (store/member store* recipient-did)
+          _ (key-registry/authorize! (:member/kem-key recipient) :encapsulate (:now context))
+          rpk (:member/kem-pub recipient)
           env (crypto/share-dek crypto* rpk dek)]
       (store/put-grant! store* #:grant{:id (str item-id "->" recipient-did)
                                        :item item-id :recipient recipient-did
@@ -101,9 +116,26 @@
       {:effect :shared :item item-id :to recipient-did})
 
     :share/revoke
-    (let [{:keys [item-id recipient-did]} request]
-      (store/revoke-grant! store* (str item-id "->" recipient-did))
-      {:effect :revoked :item item-id :to recipient-did})
+    (let [{:keys [item-id recipient-did]} request
+          it (store/item store* item-id)
+          {:keys [dek version] :as plan} (rotate-item-plan store* crypto* context it)
+          grants (mapv
+                  (fn [grant]
+                    (if (= recipient-did (:grant/recipient grant))
+                      (assoc grant :grant/revoked true :grant/revoked-at (:now context))
+                      (let [rdid (:grant/recipient grant)
+                            recipient (store/member store* rdid)
+                            _ (key-registry/authorize! (:member/kem-key recipient)
+                                                       :encapsulate (:now context))]
+                        (assoc grant
+                               :grant/envelope
+                               (crypto/share-dek crypto* (:member/kem-pub recipient) dek)
+                               :grant/key-epoch version))))
+                  (store/grants-of store* item-id))]
+      ;; Previously issued envelopes remain historical artifacts, but every
+      ;; non-revoked recipient receives only the fresh epoch DEK.
+      {:effect :revoked-and-rekeyed :item item-id :to recipient-did :version version
+       :rekey-plan (assoc plan :grants grants)})
 
     :item/list
     {:effect :listed
@@ -113,7 +145,7 @@
 
 (defn build
   "VaultActor グラフを store に束ねてコンパイル。"
-  [store* & [{:keys [advisor crypto checkpointer signer]
+  [store* & [{:keys [advisor crypto checkpointer signer signer-key]
               :or {advisor      (advisor/mock-advisor)
                    crypto       (crypto/bc-provider)
                    checkpointer (cp/mem-checkpointer)}}]]
@@ -173,15 +205,38 @@
                           ;; chains onto is always the CURRENT ledger, even
                           ;; under concurrent :effect/:hold calls -- see
                           ;; kagi.store's append-chained-ledger! docstring.
-                          e (store/append-chained-ledger!
-                             store* #(ledger/make-entry % f crypto signer))]
-                      {:result r :audit [e]})))
+                          key-opts {:key signer-key :now (:now context)}]
+                      (if-let [plan (:rekey-plan r)]
+                        (do
+                          (when-not (and signer signer-key)
+                            (throw (ex-info "rotation requires an active managed authority signer"
+                                            {:op (:op request) :actor (:did context)})))
+                          (let [event0 (rotation/new-event
+                                      {:subject (:item r) :purpose :item-dek
+                                       :from-key (:from-key plan) :to-key (:to-key plan)
+                                       :from-epoch (dec (:version plan))
+                                       :reason (if (= :share/revoke (:op request))
+                                                 :recipient-revoked :scheduled)
+                                       :parents (cond-> [] (:parent plan) (conj (:parent plan)))
+                                       :not-before (:now context)})
+                              event (rotation/sign-authorized crypto event0 (:did context) signer)
+                              item* (assoc (:item plan) :item/rotation-event (:rotation/id event))
+                              committed (store/commit-rekey!
+                                         store* (assoc plan :item item* :rotation-event event)
+                                         #(ledger/make-entry % (assoc f :rotation/id (:rotation/id event))
+                                                             crypto signer key-opts))]
+                            {:result (dissoc r :rekey-plan)
+                             :audit [(:ledger-entry committed)]}))
+                        (let [e (store/append-chained-ledger!
+                                 store* #(ledger/make-entry % f crypto signer key-opts))]
+                          {:result r :audit [e]})))))
       (g/add-node :hold
                   (fn [{:keys [request context verdict audit]}]
                     (let [hf (or (last (filter #(#{:policy-hold} (:t %)) audit))
                                  (hold-fact request context verdict))]
                       (store/append-chained-ledger!
-                       store* #(ledger/make-entry % hf crypto signer))
+                       store* #(ledger/make-entry % hf crypto signer
+                                                  {:key signer-key :now (:now context)}))
                       {:result {:effect :held}})))
       (g/set-entry-point :intake)
       (g/add-edge :intake :authn)

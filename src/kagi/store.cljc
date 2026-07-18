@@ -23,6 +23,8 @@
   (block-put! [s cid bytes])
   ;; 監査台帳(append-only、ハッシュ鎖)
   (append-ledger! [s fact])
+  ;; Rotation block/item/grants/DAG event/ledger entry become visible together.
+  (commit-rekey! [s plan build-ledger])
   ;; build-fn: (fn [ledger] entry) -- kagi.ledger/make-entry と同じ形。read
   ;; ledger snapshot -> build entry -> append を一つの原子操作にする。呼び手
   ;; (kagi.operation の :effect/:hold ノード)が (ledger s) を読んでから
@@ -51,6 +53,23 @@
   ;; entry は kagi.ledger/make-entry が seq/prev-hash/hash/sig を付けた完成形を渡す。
   ;; store は append-only の保管のみ担う(改竄検知のロジックは ledger ns)。
   (append-ledger! [_ entry] (swap! a update :ledger (fnil conj []) entry) entry)
+  (commit-rekey! [_ {:keys [block item grants rotation-event]} build-ledger]
+    (let [captured (volatile! nil)]
+      (swap! a
+             (fn [state]
+               (let [entry (build-ledger (:ledger state))]
+                 (vreset! captured entry)
+                 (-> state
+                     (assoc-in [:blocks (:cid block)] (:bytes block))
+                     (assoc-in [:items (:item/id item)] item)
+                     (update :grants
+                             (fn [existing]
+                               (reduce (fn [acc grant]
+                                         (assoc acc (:grant/id grant) grant))
+                                       (or existing {}) grants)))
+                     (assoc-in [:rotation-events (:rotation/id rotation-event)] rotation-event)
+                     (update :ledger (fnil conj []) entry)))))
+      {:ledger-entry @captured :rotation-event rotation-event :item item}))
   ;; swap! の再試行セマンティクスで read+build+append を原子化する: 競合して
   ;; f が複数回呼ばれても、実際に CAS が成功した最後の呼び出しは常に「その時点の
   ;; 最新 ledger」から entry を組み立てるので、2並行呼び出しが同じ seq/prev-hash
@@ -66,7 +85,7 @@
 (defn mem-store
   ([] (mem-store {}))
   ([seed] (->MemStore (atom (merge {:members {} :items {} :grants {}
-                                    :blocks {} :ledger []}
+                                    :blocks {} :ledger [] :rotation-events {}}
                                    seed)))))
 
 ;; ───────── KotobaStore(:db-api 越し) ─────────
@@ -90,21 +109,31 @@
   (put-item! [s rec] ((:transact! db-api) conn [rec]) s)
   (put-grant! [s rec] ((:transact! db-api) conn [rec]) s)
   (revoke-grant! [s gid] ((:transact! db-api) conn [{:grant/id gid :grant/revoked true}]) s)
-  (block-get [_ _cid] (throw (ex-info "SealedBlockStore 配線は段階導入" {})))
-  (block-put! [_ _cid _bytes] (throw (ex-info "SealedBlockStore 配線は段階導入" {})))
-  (append-ledger! [_ fact] ((:transact! db-api) conn [fact]) fact)
-  ;; best-effort: the abstract :db-api transact! offers no compare-and-swap
-  ;; primitive to build this atomically the way MemStore's swap! does, so a
-  ;; genuine race between two KotobaStore-backed callers can still corrupt
-  ;; the hash chain (same residual limitation already noted elsewhere for
-  ;; langchain.db/transact!'s non-atomicity). Closes the race for the
-  ;; default, always-available MemStore backend; a real fix here would need
-  ;; either a backend-native optimistic-concurrency primitive or an
-  ;; application-level serialization point in front of KotobaStore.
-  (append-chained-ledger! [s build-fn]
-    (let [entry (build-fn (ledger s))]
-      ((:transact! db-api) conn [entry])
-      entry)))
+  (block-get [_ cid]
+    (if-let [get! (:sealed-block-get db-api)]
+      (get! conn cid)
+      (throw (ex-info "backend lacks SealedBlockStore read"
+                      {:required :sealed-block-get :backend :kotoba-store}))))
+  (block-put! [s cid bytes]
+    (if-let [put! (:sealed-block-put! db-api)]
+      (do (put! conn cid bytes) s)
+      (throw (ex-info "backend lacks SealedBlockStore write"
+                      {:required :sealed-block-put! :backend :kotoba-store}))))
+  (append-ledger! [_ fact]
+    (if-let [tx! (:transact-ledger! db-api)]
+      (tx! conn fact)
+      (throw (ex-info "backend lacks atomic ledger transaction"
+                      {:required :transact-ledger! :backend :kotoba-store}))))
+  (commit-rekey! [_ plan build-ledger]
+    (if-let [tx! (:transact-rotation! db-api)]
+      (tx! conn plan build-ledger)
+      (throw (ex-info "backend lacks atomic rotation transaction"
+                      {:required :transact-rotation! :backend :kotoba-store}))))
+  (append-chained-ledger! [_ build-fn]
+    (if-let [append! (:append-chained-ledger! db-api)]
+      (append! conn build-fn)
+      (throw (ex-info "backend lacks atomic chained ledger transaction"
+                      {:required :append-chained-ledger! :backend :kotoba-store})))))
 
 (defn kotoba-store [db-api conn] (->KotobaStore db-api conn))
 

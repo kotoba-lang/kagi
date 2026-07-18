@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.kotoba.kagi.rotation</string>
+  <key>ProgramArguments</key>
+  <array><string>__ABSOLUTE_KAGI_REPO__/bin/kagi-scheduler</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>KAGI_IDENTITY_STORE</key><string>keychain</string>
+    <key>KAGI_SECURITY_PROFILE</key><string>production</string>
+    <key>KAGI_SIGNING_KEYSTORE_TYPE</key><string>PKCS11</string>
+    <key>KAGI_SIGNING_KEYSTORE_PROVIDER</key><string>__PKCS11_PROVIDER_NAME__</string>
+    <key>KAGI_SIGNING_KEYSTORE_ID</key><string>__HSM_SLOT_ID__</string>
+    <key>KAGI_SIGNING_ED_ALIAS</key><string>__ED25519_ALIAS__</string>
+    <key>KAGI_SIGNING_MLDSA_ALIAS</key><string>__MLDSA65_ALIAS__</string>
+    <key>KAGI_KEM_X25519_ALIAS</key><string>__X25519_ALIAS__</string>
+    <key>KAGI_KEM_MLKEM_ALIAS</key><string>__MLKEM768_ALIAS__</string>
+    <key>KAGI_UNLOCK_REF</key><string>keychain://com.junkawasaki.kagi/vmk-unlock</string>
+    <key>KAGI_ROTATION_INTERVAL_SECONDS</key><string>3600</string>
+    <key>KAGI_ROTATION_MAX_JOBS_PER_TICK</key><string>5</string>
+  </dict>
+  <key>StandardOutPath</key><string>__ABSOLUTE_LOG_DIR__/kagi-rotation.log</string>
+  <key>StandardErrorPath</key><string>__ABSOLUTE_LOG_DIR__/kagi-rotation.err.log</string>
+  <key>ThrottleInterval</key><integer>60</integer>
+</dict>
+</plist>

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Long-running scheduled item-DEK rotation. Unlock must be provided by the OS
+# keystore; do not place KAGI_MASTER in a service file or process environment.
+cd "$(dirname "$0")/.." || exit 1
+exec clojure -M:dev:scheduler

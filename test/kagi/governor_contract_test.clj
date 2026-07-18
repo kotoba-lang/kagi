@@ -16,7 +16,7 @@
     [st cr (op/build st {:crypto cr})]))
 
 (defn- run [actor req ctx]
-  (:state (g/run* actor {:request req :context ctx}
+  (:state (g/run* actor {:request req :context (assoc ctx :now (str (java.time.Instant/now)))}
                   {:thread-id (str (:op req) "-" (:item-id req) "-" (:did ctx))})))
 
 (deftest owner-create-then-reveal-roundtrips
@@ -76,11 +76,12 @@
 (deftest pqc-share-end-to-end
   (testing "owner が共有 → 受信者が hybrid KEM grant envelope を decap して平文を復元"
     (let [cr     (crypto/jvm-provider)
-          rkp    (crypto/kem-keypair cr)
-          rdid   "did:key:zRecipient"
+          rid    (identity/generate-identity cr)
+          rkp    {:public (identity/kem-public rid) :secret (identity/kem-secret rid)}
+          rdid   (:did rid)
           st     (store/mem-store
                   {:members {"did:key:zOwner" #:member{:did "did:key:zOwner" :role :owner}
-                             rdid #:member{:did rdid :role :member :kem-pub (:public rkp)}}})
+                             rdid (identity/member-record rid :member)}})
           actor  (op/build st {:crypto cr})
           owner  {:did "did:key:zOwner" :role :owner :phase 2
                   :vmk (crypto/rand-bytes cr 32) :purpose :daily-use :consent? true}
@@ -156,6 +157,42 @@
       (is (= (:did recip-id) (:grant/recipient grant)))
       (is (= secret (String. ^bytes pt "UTF-8"))
           "受信者は自分の identity 秘密鍵だけで PQC envelope を開ける"))))
+
+(deftest revoke-rotates-dek-and-reenvelopes-remaining-recipients
+  (let [cr (crypto/jvm-provider)
+        owner-id (identity/generate-identity cr)
+        r1 (identity/generate-identity cr)
+        r2 (identity/generate-identity cr)
+        st (store/mem-store)
+        _ (store/put-member! st (identity/member-record owner-id :owner))
+        _ (store/put-member! st (identity/member-record r1 :member))
+        _ (store/put-member! st (identity/member-record r2 :member))
+        actor (op/build st {:crypto cr :signer (identity/sign-secret owner-id)
+                            :signer-key (:signing-key owner-id)})
+        owner {:did (:did owner-id) :role :owner :phase 3
+               :vmk (crypto/rand-bytes cr 32) :purpose :revoke :consent? true}
+        _ (run actor {:op :item/create :item-id "shared" :compartment "work"
+                      :plaintext (.getBytes "rotated-secret" "UTF-8")} owner)
+        _ (run actor {:op :share/grant :item-id "shared" :recipient-did (:did r1)} owner)
+        _ (run actor {:op :share/grant :item-id "shared" :recipient-did (:did r2)} owner)
+        old-item (store/item st "shared")
+        result (run actor {:op :share/revoke :item-id "shared" :recipient-did (:did r1)} owner)
+        next-item (store/item st "shared")
+        grants (store/grants-of st "shared")
+        g1 (first (filter #(= (:did r1) (:grant/recipient %)) grants))
+        g2 (first (filter #(= (:did r2) (:grant/recipient %)) grants))
+        dek2 (crypto/accept-share cr (identity/kem-secret r2) (:grant/envelope g2))
+        pt2 (crypto/open-item cr dek2 (:item/nonce next-item)
+                              (store/block-get st (:item/cid next-item))
+                              (vault/item-aad "shared"))]
+    (is (= :revoked-and-rekeyed (get-in result [:result :effect])))
+    (is (= (inc (:item/version old-item)) (:item/version next-item)))
+    (is (:grant/revoked g1))
+    (is (= (:item/key-epoch next-item) (:grant/key-epoch g2)))
+    (is (= "rotated-secret" (String. ^bytes pt2 "UTF-8")))
+    (is (thrown? Exception
+                 (crypto/accept-share cr (identity/kem-secret r1)
+                                      (:grant/envelope g2))))))
 
 (deftest high-value-escalates-not-commits
   (testing "高価値カテゴリの reveal は自動 commit されず escalate(承認待ち)"

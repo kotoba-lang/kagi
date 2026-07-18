@@ -3,8 +3,10 @@
   (:require [clojure.test :refer [deftest testing is]]
             [kagi.cacao :as cacao]
             [kagi.identity :as identity]
+            [kagi.crypto :as crypto]
             [ed25519.core :as ed25519])
-  (:import [java.util Base64]))
+  (:import [java.util Base64]
+           [java.security Signature]))
 
 (deftest mint-verify-roundtrip
   (testing "actor が自分の鍵で mint した CACAO を verify が通す(iss=自 did)"
@@ -15,6 +17,32 @@
       (is (:ok? r))
       (is (= (:did id) (:iss r)))
       (is (= "https://kotobase.net" (:aud r))))))
+
+(deftest mint-with-opaque-signing-handle
+  (testing "CACAO mint can use a non-exporting Ed25519 capability"
+    (let [generated (identity/generate-identity)
+          calls (atom 0)
+          handle (reify crypto/SigningHandle
+                   (sign-hybrid [_ _ _] (throw (ex-info "not used" {})))
+                   (sign-ed25519 [_ message]
+                     (swap! calls inc)
+                     (let [s (doto (Signature/getInstance "Ed25519")
+                               (.initSign (:private-key generated))
+                               (.update message))]
+                       (.sign s))))
+          id (-> generated
+                 (dissoc :private-key :private-b64 :mldsa-private-b64)
+                 (assoc :signing-handle handle))
+          token (cacao/mint id {:cap :cap/read :scope (:graph id)}
+                            {:aud "https://kotobase.net" :nonce "opaque-1"})]
+      (is (= 1 @calls))
+      (is (true? (:ok? (cacao/verify token {:aud "https://kotobase.net"})))))))
+
+(deftest mint-without-any-signing-capability-fails-closed
+  (let [id (-> (identity/generate-identity) (dissoc :private-key))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"opaque signing handle"
+                          (cacao/mint id {:cap :cap/read :scope (:graph id)}
+                                      {:aud "u" :nonce "n"})))))
 
 (deftest tampered-signature-fails
   (testing "署名 byte を 1 bit 反転すると verify が落ちる"

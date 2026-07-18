@@ -7,7 +7,8 @@
   SIWE/wire ビルダは `kotoba.cacao` の byte-exact 純関数の写し(同期して保つ)。crypto は
   JDK Ed25519 + 最小 CBOR(definite-length)。"
   (:require [clojure.string :as str]
-            [ed25519.core :as ed25519])
+            [ed25519.core :as ed25519]
+            [kagi.crypto :as crypto])
   (:import [java.security Signature]
            [java.io ByteArrayOutputStream]
            [java.util Base64]
@@ -116,11 +117,16 @@
 (defn mint
   "actor が自分の Ed25519 鍵で base64 cacao を自己発行する。
    identity: {:private-key :did}、grant: {:cap :scope}、opts: {:aud :nonce :issued-at :expiry}。"
-  [{:keys [private-key did]} grant {:keys [aud nonce issued-at expiry]}]
+  [{:keys [private-key did signing-handle]} grant {:keys [aud nonce issued-at expiry]}]
   (let [payload (grant->payload grant {:iss did :aud aud :nonce nonce
                                        :issued-at issued-at :expiry expiry})
         msg     (siwe-message payload)
-        sig     (ed-sign private-key (.getBytes ^String msg "UTF-8"))
+        msg-bytes (.getBytes ^String msg "UTF-8")
+        sig     (if signing-handle
+                  (crypto/sign-ed25519 signing-handle msg-bytes)
+                  (if private-key
+                    (ed-sign private-key msg-bytes)
+                    (throw (ex-info "CACAO requires an opaque signing handle" {:did did}))))
         sig-b64 (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) sig)]
     (.encodeToString (Base64/getEncoder) (cbor-bytes (->wire payload sig-b64)))))
 

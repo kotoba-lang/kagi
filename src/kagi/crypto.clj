@@ -9,7 +9,7 @@
     - ML-KEM-768 : **JDK 24 標準**(JEP 496, FIPS 203)。`KeyPairGenerator/KEM \"ML-KEM-768\"`。
     - ML-DSA-65  : **JDK 24 標準**(JEP 497, FIPS 204)。`Signature \"ML-DSA-65\"`。
     - Ed25519 / X25519 / AES-256-GCM / HMAC : JDK 標準。
-    - Argon2id   : provider seam 上の互換 KDF。JDK-only 経路では HKDF-SHA256 で決定的に導出。
+    - Argon2id   : BouncyCastle の実 Argon2id。利用不能なら fail closed。
   (CLJS/WASM は kotoba-crypto Rust を束ねた別ファイルの cljs provider で同 Protocol を実装。)
 
   hybrid 構成:
@@ -20,7 +20,9 @@
   (:import [java.security KeyPairGenerator KeyFactory Signature SecureRandom MessageDigest KeyPair Key]
            [java.security.spec X509EncodedKeySpec PKCS8EncodedKeySpec]
            [javax.crypto Cipher Mac KEM KeyAgreement]
-           [javax.crypto.spec SecretKeySpec GCMParameterSpec]))
+           [javax.crypto.spec SecretKeySpec GCMParameterSpec]
+           [org.bouncycastle.crypto.generators Argon2BytesGenerator]
+           [org.bouncycastle.crypto.params Argon2Parameters Argon2Parameters$Builder]))
 
 ;; ───────── Provider seam ─────────
 
@@ -39,6 +41,31 @@
   (hkdf [p ikm salt info len] "→ derived key bytes")
   (argon2id [p pass salt params] "→ KEK(32B)。params {:m-kb :t :p}")
   (rand-bytes [p n] "→ CSPRNG n bytes"))
+
+(defprotocol SigningHandle
+  "Opaque signing capability. Implementations may delegate to a non-exportable
+  OS/HSM key and must never expose private-key encoding through this protocol."
+  (sign-hybrid [signer provider message] "Return {:ed :mldsa} signatures.")
+  (sign-ed25519 [signer message] "Return an Ed25519 signature for CACAO."))
+
+(defprotocol DecapsulationHandle
+  "Opaque hybrid KEM decapsulation capability backed by non-exportable keys."
+  (decapsulate-hybrid [recipient provider ciphertext] "Return the combined 32-byte secret."))
+
+(defn sign-with
+  "Sign with either an opaque SigningHandle or the legacy encoded secret bundle.
+  The latter remains a compatibility path for migration and tests."
+  [provider signer ^bytes message]
+  (if (satisfies? SigningHandle signer)
+    (sign-hybrid signer provider message)
+    (sign* provider signer message)))
+
+(defn kem-decap-with
+  "Decapsulate through an opaque handle or a legacy encoded secret bundle."
+  [provider recipient ciphertext]
+  (if (satisfies? DecapsulationHandle recipient)
+    (decapsulate-hybrid recipient provider ciphertext)
+    (kem-decap provider recipient ciphertext)))
 
 ;; ───────── 可搬ヘルパ(provider 越し) ─────────
 
@@ -79,20 +106,30 @@
   [p recipient-hybrid-pk ^bytes dek]
   (let [{:keys [ciphertext shared]} (kem-encap p recipient-hybrid-pk)
         nonce (rand-bytes p 12)]
-    {:kem-ct ciphertext :nonce nonce
-     :wrapped (aead-seal p shared nonce dek (byte-array 0))}))
+    (try
+      {:kem-ct ciphertext :nonce nonce
+       :wrapped (aead-seal p shared nonce dek (byte-array 0))}
+      (finally
+        (java.util.Arrays/fill ^bytes shared (byte 0))))))
 
 (defn accept-share
   "受信者が自分の hybrid 秘密鍵で decapsulate → DEK 復元。"
   [p hybrid-sk {:keys [kem-ct nonce wrapped]}]
-  (let [shared (kem-decap p hybrid-sk kem-ct)]
-    (aead-open p shared nonce wrapped (byte-array 0))))
+  (let [shared (kem-decap-with p hybrid-sk kem-ct)]
+    (try
+      (aead-open p shared nonce wrapped (byte-array 0))
+      (finally
+        (java.util.Arrays/fill ^bytes shared (byte 0))))))
 
 ;; ───────── 低レベル JCA ヘルパ ─────────
 
 (defn- ba ^bytes [xs] (byte-array (mapcat seq xs)))
 
 (defn- gcm [mode ^bytes key ^bytes nonce ^bytes in ^bytes aad]
+  (when-not (= 32 (alength key))
+    (throw (ex-info "AES-256-GCM requires a 32-byte key" {:length (alength key)})))
+  (when-not (= 12 (alength nonce))
+    (throw (ex-info "AES-GCM requires a 96-bit nonce" {:length (alength nonce)})))
   (let [c (Cipher/getInstance "AES/GCM/NoPadding")]
     (.init c (int mode) (SecretKeySpec. key "AES") (GCMParameterSpec. 128 nonce))
     (when (and aad (pos? (alength aad))) (.updateAAD c aad))
@@ -107,10 +144,62 @@
   (.digest (MessageDigest/getInstance "SHA-256") b))
 
 (defn- hkdf-sha256 ^bytes [^bytes ikm ^bytes salt ^bytes info len]
-  ;; RFC5869(HMAC-SHA256), 単一ブロック(len<=32)前提の最小実装
-  (let [prk (hmac-sha256 salt ikm)
-        t   (hmac-sha256 prk (ba [info [(byte 1)]]))]
-    (java.util.Arrays/copyOf t (int len))))
+  ;; RFC 5869 extract+expand. The previous one-block implementation silently
+  ;; zero-extended requests above 32 bytes via Arrays/copyOf -- catastrophic
+  ;; if a future caller split those predictable bytes into another key.
+  (when-not (and (integer? len) (pos? len) (<= len (* 255 32)))
+    (throw (ex-info "invalid HKDF-SHA256 output length"
+                    {:length len :maximum (* 255 32)})))
+  (let [salt* (if (zero? (alength salt)) (byte-array 32) salt)
+        prk (hmac-sha256 salt* ikm)
+        output (byte-array len)]
+    (try
+      (loop [counter 1 previous (byte-array 0) offset 0]
+        (let [block (hmac-sha256 prk (ba [previous info [(unchecked-byte counter)]]))
+              take (min 32 (- len offset))]
+          (System/arraycopy block 0 output offset take)
+          (when (pos? (alength previous))
+            (java.util.Arrays/fill ^bytes previous (byte 0)))
+          (if (= len (+ offset take))
+            (do (java.util.Arrays/fill ^bytes block (byte 0)) output)
+            (recur (inc counter) block (+ offset take)))))
+      (finally
+        (java.util.Arrays/fill ^bytes prk (byte 0))))))
+
+(defn legacy-kdf-v0
+  "Read-only compatibility KDF for vaults created before the real Argon2id fix.
+  Never use this function to create or re-wrap an envelope."
+  ^bytes [^bytes pass ^bytes salt {:keys [m-kb t p] :or {m-kb 262144 t 3 p 4}}]
+  (loop [i 0
+         out (hkdf-sha256 pass salt
+                          (.getBytes (str "kagi/argon2id-compat/v1:"
+                                          m-kb ":" t ":" p)
+                                     "UTF-8")
+                          32)]
+    (if (< i (max 1 (int t)))
+      (recur (inc i)
+             (hkdf-sha256 out salt
+                          (ba [(.getBytes "kagi/argon2id-compat/round" "UTF-8")
+                               [(byte (bit-and i 0xff))]])
+                          32))
+      out)))
+
+(defn- argon2id-real
+  ^bytes [^bytes pass ^bytes salt {:keys [m-kb t p] :or {m-kb 262144 t 3 p 4}}]
+  (when (or (< (long m-kb) 8192) (< (long t) 1) (< (long p) 1))
+    (throw (ex-info "unsafe Argon2id parameters"
+                    {:m-kb m-kb :t t :p p :minimum {:m-kb 8192 :t 1 :p 1}})))
+  (let [params (-> (Argon2Parameters$Builder. Argon2Parameters/ARGON2_id)
+                   (.withVersion Argon2Parameters/ARGON2_VERSION_13)
+                   (.withSalt salt)
+                   (.withMemoryAsKB (int m-kb))
+                   (.withIterations (int t))
+                   (.withParallelism (int p))
+                   (.build))
+        generator (doto (Argon2BytesGenerator.) (.init params))
+        out (byte-array 32)]
+    (.generateBytes generator pass out)
+    out))
 
 (defn- pub-key [alg ^bytes enc] (.generatePublic (KeyFactory/getInstance alg) (X509EncodedKeySpec. enc)))
 (defn- priv-key [alg ^bytes enc] (.generatePrivate (KeyFactory/getInstance alg) (PKCS8EncodedKeySpec. enc)))
@@ -126,6 +215,21 @@
 (defn- x25519-ka ^bytes [priv pub]
   (let [ka (doto (KeyAgreement/getInstance "X25519") (.init priv))]
     (.doPhase ka pub true) (.generateSecret ka)))
+
+(defn hybrid-kem-shared
+  "Combine native or software X25519/ML-KEM shared secrets with the exact
+  transcript used by kagi/kem/v1. The input secrets remain caller-owned; the
+  temporary concatenation is erased here."
+  [^bytes ss-x ^bytes ss-pq ^bytes recipient-x-public ^bytes ephemeral-x-public
+   ^bytes recipient-pq-public ^bytes pq-ciphertext]
+  (let [transcript (sha256 (ba [recipient-x-public ephemeral-x-public
+                                recipient-pq-public pq-ciphertext]))
+        ikm (ba [ss-x ss-pq])]
+    (try
+      (hkdf-sha256 ikm (byte-array 0)
+                   (ba [(.getBytes ^String kem-info "UTF-8") transcript]) 32)
+      (finally
+        (java.util.Arrays/fill ^bytes ikm (byte 0))))))
 
 ;; ───────── jvm-provider(JDK24 標準 PQC + JDK-only KDF) ─────────
 
@@ -159,21 +263,25 @@
               encr   (.newEncapsulator (KEM/getInstance "ML-KEM") pq-pub)
               r      (.encapsulate encr)
               ss-pq  (enc (.key r))
-              ct-pq  (.encapsulation r)
-              transcript (sha256 (ba [x eph-pub pq ct-pq]))
-              shared (hkdf-sha256 (ba [ss-x ss-pq]) (byte-array 0)
-                                  (ba [(.getBytes ^String kem-info "UTF-8") transcript]) 32)]
-          {:ciphertext {:x eph-pub :pq ct-pq} :shared shared}))
+              ct-pq  (.encapsulation r)]
+          (try
+            {:ciphertext {:x eph-pub :pq ct-pq}
+             :shared (hybrid-kem-shared ss-x ss-pq x eph-pub pq ct-pq)}
+            (finally
+              (doseq [secret [ss-x ss-pq]]
+                (java.util.Arrays/fill ^bytes secret (byte 0)))))))
       (kem-decap [_ {:keys [x pq x-pub pq-pub]} {ct-x :x ct-pq :pq}]
         (let [x-priv  (priv-key "X25519" x)
               pq-priv (priv-key "ML-KEM-768" pq)
               eph-pub (pub-key "X25519" ct-x)
               ss-x    (x25519-ka x-priv eph-pub)
               dec     (.newDecapsulator (KEM/getInstance "ML-KEM") pq-priv)
-              ss-pq   (enc (.decapsulate dec ct-pq))
-              transcript (sha256 (ba [x-pub ct-x pq-pub ct-pq]))]
-          (hkdf-sha256 (ba [ss-x ss-pq]) (byte-array 0)
-                       (ba [(.getBytes ^String kem-info "UTF-8") transcript]) 32)))
+              ss-pq   (enc (.decapsulate dec ct-pq))]
+          (try
+            (hybrid-kem-shared ss-x ss-pq x-pub ct-x pq-pub ct-pq)
+            (finally
+              (doseq [secret [ss-x ss-pq]]
+                (java.util.Arrays/fill ^bytes secret (byte 0)))))))
 
       ;; --- hybrid 署名: Ed25519 + ML-DSA-65 ---
       (sign-keypair [_]
@@ -187,21 +295,9 @@
         (and (jca-verify "Ed25519"  (pub-key "Ed25519" ed) msg (:ed sig))
              (jca-verify "ML-DSA-65" (pub-key "ML-DSA-65" mldsa) msg (:mldsa sig))))
 
-      ;; --- Argon2id-compatible seam(JDK-only deterministic KDF) ---
-      (argon2id [_ pass salt {:keys [m-kb t p] :or {m-kb 262144 t 3 p 4}}]
-        (loop [i 0
-               out (hkdf-sha256 pass salt
-                                (.getBytes (str "kagi/argon2id-compat/v1:"
-                                                m-kb ":" t ":" p)
-                                           "UTF-8")
-                                32)]
-          (if (< i (max 1 (int t)))
-            (recur (inc i)
-                   (hkdf-sha256 out salt
-                                (ba [(.getBytes "kagi/argon2id-compat/round" "UTF-8")
-                                     [(byte (bit-and i 0xff))]])
-                                32))
-            out))))))
+      ;; --- real Argon2id; no silent downgrade ---
+      (argon2id [_ pass salt params]
+        (argon2id-real pass salt params)))))
 
 ;; 後方互換: 旧称 bc-provider は jvm-provider を返す。
 (def bc-provider jvm-provider)

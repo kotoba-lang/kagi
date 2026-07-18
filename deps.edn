@@ -1,8 +1,8 @@
 {:paths ["src"]
  ;; langgraph-clj brings langchain-clj transitively (both zero-/single-dep, all
  ;; .cljc → portable to JVM / SCI / ClojureScript / GraalVM). The PQC primitives
- ;; (ML-KEM-768 / ML-DSA-65 / SLH-DSA) are provided on the JVM by BouncyCastle via
- ;; JCA; Ed25519 + AES-256-GCM come from the JDK. CLJS/WASM uses the kotoba-crypto
+ ;; ML-KEM-768 / ML-DSA-65, Ed25519 and AES-256-GCM are provided by the JDK via
+ ;; JCA. BouncyCastle is used only for Argon2id. CLJS/WASM uses the kotoba-crypto
  ;; Rust provider instead (see src/kagi/crypto.cljc :: Provider seam).
  :deps {io.github.kotoba-lang/langgraph
         {:local/root "../langgraph"}
@@ -15,16 +15,26 @@
         io.github.kotoba-lang/org-ietf-ed25519
         {:sha "fdcefb9f1b83461fee54d04b63e374fa301ee847"}
         io.github.kotoba-lang/tech-ipfs-specs-ipns
-        {:sha "f2563eb1cb010c96f6dec1dfbd468fac93367498"}}
+        {:sha "f2563eb1cb010c96f6dec1dfbd468fac93367498"}
+        ;; Canonical DAG-CBOR bytes for content-addressed rotation events.
+        io.github.kotoba-lang/dag-cbor
+        {:git/sha "578a48aeca110497298d22ce6d8b322dc14fe170"}
+        ;; Real memory-hard Argon2id. This is deliberately a direct dependency:
+        ;; VMK protection must never silently fall back to a cheap compatibility KDF.
+        org.bouncycastle/bcprov-jdk18on {:mvn/version "1.84"}}
  :aliases
  {;; offline workspace dev — pin transitive langchain-clj to local checkout
   :dev {:override-deps
         {io.github.kotoba-lang/langchain
-         {:local/root "../langchain"}}}
+         {:local/root "../langchain"}
+         io.github.kotoba-lang/dag-cbor
+         {:git/sha "578a48aeca110497298d22ce6d8b322dc14fe170"}}}
   ;; clojure -M:dev:run  → drive the demo ops through one VaultActor
   :run {:main-opts ["-m" "kagi.sim"]}
   ;; clojure -M:dev:cli <cmd>  → op 相当の CLI(vault は ./.kagi)。bin/kagi も参照。
   :cli {:main-opts ["-m" "kagi.cli"]}
+  :witness {:main-opts ["-m" "kagi.witness-main"]}
+  :scheduler {:main-opts ["-m" "kagi.rotation-main"]}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}

@@ -4,7 +4,8 @@
   (:require [clojure.test :refer [deftest testing is]]
             [kagi.store :as store]
             [kagi.ledger :as ledger]
-            [kagi.crypto :as crypto]))
+            [kagi.crypto :as crypto]
+            [kagi.rotation :as rotation]))
 
 (defn- exercise [st]
   (store/put-item! st #:item{:id "a" :compartment "c" :cid "cid:a" :version 1})
@@ -62,3 +63,38 @@
             "every concurrent writer got a distinct seq -- none silently collided")
         (is (:ok? (ledger/verify-chain l nil (constantly nil)))
             "the hash chain is intact under real thread contention")))))
+
+(deftest rekey-commit-is-all-or-nothing-when-ledger-build-fails
+  (let [st (store/mem-store)
+        before @(.-a ^kagi.store.MemStore st)
+        event (rotation/new-event {:subject "item-1" :purpose :item-dek
+                                   :from-key "dek-0" :to-key "dek-1" :from-epoch 0})
+        plan {:block {:cid "cid:new" :bytes (byte-array [9])}
+              :item #:item{:id "item-1" :cid "cid:new" :version 1}
+              :grants [#:grant{:id "g" :item "item-1"}]
+              :rotation-event event}]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"synthetic failure"
+                          (store/commit-rekey!
+                           st plan (fn [_] (throw (ex-info "synthetic failure" {}))))))
+    (is (= before @(.-a ^kagi.store.MemStore st)))))
+
+(deftest kotoba-store-fails-closed-without-atomic-rotation-api
+  (let [st (store/kotoba-store {} :conn)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"lacks atomic"
+                          (store/commit-rekey! st {} identity)))))
+
+(deftest kotoba-store-delegates-to-sealed-block-capability
+  (let [blocks (atom {})
+        api {:sealed-block-put! (fn [_ cid bytes] (swap! blocks assoc cid bytes))
+             :sealed-block-get (fn [_ cid] (get @blocks cid))}
+        st (store/kotoba-store api :conn)
+        bytes (byte-array [4 5 6])]
+    (store/block-put! st "cid:sealed" bytes)
+    (is (= (seq bytes) (seq (store/block-get st "cid:sealed"))))))
+
+(deftest kotoba-store-sealed-block-boundary-fails-closed)
+  (let [st (store/kotoba-store {} :conn)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"SealedBlockStore read"
+                          (store/block-get st "cid:x")))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"SealedBlockStore write"
+                          (store/block-put! st "cid:x" (byte-array 0)))))
