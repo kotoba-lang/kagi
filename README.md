@@ -59,16 +59,44 @@ bin/kagi whoami                       # 自分の did:key / IPNS graph
 bin/kagi identity-migrate             # identity 秘密鍵を Apple Keychain へ移す
 bin/kagi unlock-enable-keychain       # VMK unlock を Apple Keychain に追加
 bin/kagi unlock-status                # unlock envelope metadata を表示
+bin/kagi push                         # 暗号化済み vault snapshot を kotobase.net へ upsert
+bin/kagi pull                         # cloud の最新 snapshot を取得（local .bak を先に取る）
+bin/kagi sync                         # pull-if-newer してから push（last-writer-wins）
 ```
 
 - `bin/kagi` は `clojure -M:dev:cli` のラッパ（PQC は JDK24 標準 provider を使うため bb 不可）。
 - master passphrase は環境変数 **`KAGI_MASTER`** か端末プロンプト。`unlock-enable-keychain`
   後は device-local OS keychain unlock を先に試し、passphrase は recovery として残す。
-- 保存先は実行ディレクトリの **`./.kagi/`**（gitignore）:
+- 保存先は **`$KAGI_HOME`（既定 `~/.kagi`、repo 外）**（ADR-2607170500、2026-07-17）:
   - `identity.edn` — Ed25519/ML-DSA 鍵 + KEM 受信鍵
   - `vault.edn` — **暗号文 item + wrap 済み鍵 + 台帳のみ**（平文・素の VMK は出ない。
     unlock = passphrase→Argon2id(256MiB)→KEK→VMK 復号）
+  - `init` は home に既存 vault があれば拒否する（再init による上書き事故 — 2026-07-16
+    に共有 checkout の `./.kagi/` が並行セッションの再init で失われ、fleet 署名鍵を
+    ローテーションする羽目になった実例、ADR-2607170500 — の再発防止）。旧 `./.kagi/`
+    （repo-local）しか無い環境では初回アクセス時に自動で home へ移行する。
 - `op` 対応: `op item get` → `kagi get` / `op item create` → `kagi add` / `op item list` → `kagi ls`。
+
+## cloud 永続化（iCloud Keychain / 1Password 相当、ADR-2607170500）
+
+vault はディスク上で既に暗号文のみ（ciphertext item + wrap 済み鍵 + 台帳、平文・生 VMK
+は一切出ない）なので、その blob をそのまま untrusted なサーバへ送るのは安全 —
+kotobase.net は ciphertext しか保持せず、master passphrase / OS-keychain VMK unlock は
+端末を離れない。これが iCloud Keychain と同じ信頼モデル（サーバは同期リレーで、
+信頼の根ではない）。
+
+```bash
+bin/kagi push   # 自分の graph kotobase/db/<did>/kagi-vault へ暗号化 snapshot を upsert
+bin/kagi pull   # cloud から最新 snapshot を取得して local vault を置換（先に .bak へ退避）
+bin/kagi sync   # pull-if-newer → push（:kagi.vault/seq で last-writer-wins）
+```
+
+- 認可は depth-1 の自己発行 CACAO（actor が自分の DID を graph に持つので、
+  handed token も coordination-server auth-key も不要）。
+- multi-device 同時編集の merge は非対応（1Password 同様、実用上は稀という判断。
+  follow-up として記録済み、item 粒度の sync は現状 vault 単位の follow-up）。
+- 新デバイスは `bin/kagi pull` だけで vault を復元できる（+ master passphrase /
+  device unlock）。
 
 ### identity key custody
 
