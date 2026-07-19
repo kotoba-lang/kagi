@@ -25,5 +25,11 @@
                       :artifact-sha256 "4a40b8f7c8d831738f465281ced38932ce2ca5dc106c60a6855cf2141e8e5e35"}
                 :wasm {:main 42 :matrix-cases 192
                        :artifact-sha256 "0545d43e5d5198c6b2622294669652a9c0654b76cfffda2a7435477d848480e0"}
-                :required-capabilities [] :hosted-ci :pending}
+                :required-capabilities []
+                :hosted-ci
+                {:run "https://github.com/kotoba-lang/kagi/actions/runs/29698233515"
+                 :jdk 24
+                 :compile-step :passed
+                 :web-wasm-matrix-step :passed
+                 :full-repository-suite :pre-existing-main-failure}}
  :cutover {:phase-gate-authorized true :cljc-oracle-retained true}}
