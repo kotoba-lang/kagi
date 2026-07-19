@@ -1,16 +1,46 @@
 (ns kagi.witness-http-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.java.shell :as shell]
+            [clojure.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.rotation :as rotation]
             [kagi.witness :as witness]
             [kagi.witness-http :as http]
             [kagi.witness-main :as witness-main]
-            [kagi.witness-service :as service]))
+            [kagi.witness-service :as service])
+  (:import [java.io FileInputStream]
+           [java.security KeyStore]
+           [javax.net.ssl KeyManagerFactory SSLContext TrustManagerFactory]))
 
 (defn- file-service [p public-of suffix]
   (let [dir (doto (java.io.File/createTempFile (str "witness-http-" suffix) ".tmp")
               (.delete) (.mkdirs))]
     (service/file-service (str (java.io.File. dir "state.edn")) p public-of)))
+
+(defn- test-mtls-contexts []
+  (let [file (doto (java.io.File/createTempFile "kagi-witness-mtls" ".p12") (.delete))
+        password "kagi-test-only"
+        result (shell/sh "keytool" "-genkeypair" "-alias" "witness"
+                         "-keyalg" "EC" "-groupname" "secp256r1" "-validity" "1"
+                         "-dname" "CN=localhost"
+                         "-ext" "SAN=dns:localhost,ip:127.0.0.1"
+                         "-storetype" "PKCS12" "-keystore" (.getPath file)
+                         "-storepass" password "-keypass" password "-noprompt")]
+    (when-not (zero? (:exit result))
+      (throw (ex-info "keytool test certificate generation failed" result)))
+    (let [chars (.toCharArray password)
+          store (KeyStore/getInstance "PKCS12")]
+      (with-open [in (FileInputStream. file)] (.load store in chars))
+      (let [kmf (KeyManagerFactory/getInstance
+                 (KeyManagerFactory/getDefaultAlgorithm))
+            tmf (TrustManagerFactory/getInstance
+                 (TrustManagerFactory/getDefaultAlgorithm))]
+        (.init kmf store chars)
+        (.init tmf store)
+        (let [mutual (SSLContext/getInstance "TLS")
+              trust-only (SSLContext/getInstance "TLS")]
+          (.init mutual (.getKeyManagers kmf) (.getTrustManagers tmf) nil)
+          (.init trust-only nil (.getTrustManagers tmf) nil)
+          {:mutual mutual :trust-only trust-only})))))
 
 (deftest independent-http-witnesses-exchange-and-verify-checkpoints
   (let [p (crypto/jvm-provider)
@@ -50,3 +80,18 @@
                              (assoc config :witness/bind "0.0.0.0"))))
       (is (nil? (:private-keys running)))
       (finally (.close (:server running))))))
+
+(deftest remote-witness-mtls-requires-a-client-certificate
+  (let [p (crypto/jvm-provider)
+        key (crypto/sign-keypair p)
+        public-of #(when (= "w1" %) (:public key))
+        remote (file-service p public-of "mtls")
+        {:keys [mutual trust-only]} (test-mtls-contexts)
+        server (http/start-mtls! remote mutual)
+        endpoint (http/endpoint server)]
+    (try
+      (is (re-find #"^https://" endpoint))
+      (is (= [] (http/fetch-checkpoints (http/mtls-client mutual) endpoint)))
+      (is (thrown? Exception
+                   (http/fetch-checkpoints (http/mtls-client trust-only) endpoint)))
+      (finally (.close server)))))

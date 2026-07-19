@@ -12,6 +12,8 @@
   #{:hardware-handle-integration
     :real-browser-passkey
     :independent-witness-deployment
+    :mtls-witness-deployment
+    :incident-closed-loop-drill
     :production-rotation-deployment
     :production-concurrency-soak
     :nonce-cleanup-observation
