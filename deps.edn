@@ -15,6 +15,10 @@
         io.github.kotoba-lang/security
         {:git/url "https://github.com/kotoba-lang/security.git"
          :git/sha "993e9ed370b9550ef1a3168b718dfa16b99516c7"}
+        ;; Canonical receipt bytes for signed incident-response evidence.
+        io.github.kotoba-lang/dag-cbor
+        {:git/url "https://github.com/kotoba-lang/dag-cbor.git"
+         :git/sha "578a48aeca110497298d22ce6d8b322dc14fe170"}
         ;; canonical did:key + IPNS-name derivation (ADR-2607050100) — replaces
         ;; this repo's own copy-pasted base58btc/base36/did-key/ipns-name.
         io.github.kotoba-lang/org-ietf-ed25519

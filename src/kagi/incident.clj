@@ -46,7 +46,7 @@
                           :status :passed
                           :artifact-sha256 (:artifact-sha256 result)}]
     (assoc receipt :receipt/signature
-           (crypto/sign-with provider signer (receipt-bytes receipt)))))
+           (crypto/sign* provider signer (receipt-bytes receipt)))))
 
 (defn valid-receipt? [provider public receipt]
   (and (= :passed (:receipt/status receipt))
