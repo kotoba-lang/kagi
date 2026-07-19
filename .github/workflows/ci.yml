@@ -22,4 +22,17 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@13.4
         with:
           cli: latest
-      - run: clojure -M:test
+      - name: Compile typed phase gate
+        run: |
+          mkdir -p target/kotoba
+          clojure -M:kotoba compile test/kagi/phase_conformance.kotoba \
+            --source-path src --target js-browser --output target/kotoba/phase.mjs
+          clojure -M:kotoba compile test/kagi/phase_conformance.kotoba \
+            --source-path src --target wasm32-browser --output target/kotoba/phase.wasm
+      - name: Execute Web and typed Wasm phase matrix
+        run: |
+          compiler_src="$(clojure -Spath -M:kotoba | tr ':' '\n' | grep '/compiler/' | head -1)"
+          node scripts/verify-kotoba-phase.mjs target/kotoba/phase.mjs \
+            target/kotoba/phase.wasm "$(dirname "$compiler_src")/runtime/browser-host.mjs"
+      - name: Run full repository tests
+        run: clojure -M:test
