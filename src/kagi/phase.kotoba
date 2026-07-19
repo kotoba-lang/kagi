@@ -1,0 +1,45 @@
+(ns kagi.phase
+  (:export [gate]))
+
+(def reason-type [:option :keyword])
+(def gate-type
+  [:record :kagi/phase-gate
+   [[:disposition :keyword] [:reason [:alias reason-type]]]])
+
+(defn read-op-code [op :keyword] :i64
+  (if (= op :item/reveal) 1 (if (= op :item/list) 1 0)))
+
+(defn write-op-code [op :keyword] :i64
+  (if (= op :item/create) 1
+    (if (= op :item/update) 1
+      (if (= op :item/rotate) 1
+        (if (= op :share/grant) 1
+          (if (= op :share/revoke) 1 0))))))
+
+(defn phase-level [phase :i64] :i64
+  (if (= phase 0) 0
+    (if (= phase 1) 1 (if (= phase 2) 2 (if (= phase 3) 3 1)))))
+
+(defn auto-op-code [phase :i64 op :keyword] :i64
+  (if (= phase 3) (write-op-code op)
+    (if (= op :item/create) 1
+      (if (= op :item/update) 1
+        (if (= phase 2)
+          (if (= op :share/grant) 1 0)
+          0)))))
+
+(defn result [disposition :keyword] [:alias gate-type]
+  (record gate-type disposition (option-none-of reason-type)))
+
+(defn caution [disposition :keyword reason :keyword] [:alias gate-type]
+  (record gate-type disposition (option-some-of reason-type reason)))
+
+(defn gate [phase :i64 op :keyword disposition :keyword] [:alias gate-type]
+  (let [level (phase-level phase)]
+    (if (= disposition :hold) (result :hold)
+      (if (= (read-op-code op) 1) (result disposition)
+        (if (or (= level 0) (= (write-op-code op) 0))
+          (caution :hold :phase-disabled)
+          (if (and (= disposition :commit) (= (auto-op-code level op) 0))
+            (caution :escalate :phase-approval)
+            (result disposition)))))))

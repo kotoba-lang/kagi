@@ -1,5 +1,11 @@
 # kagi-clj — 対量子(PQC)シークレット vault（1Password 代替）
 
+`src/kagi/phase.kotoba` is the capability-free typed form of the phase gate.
+It preserves the rule that a phase may only add caution and can never relax a
+policy disposition. CI compares 192 phase/operation/disposition combinations
+on CLJC, restricted Web JavaScript, and typed Wasm. Cryptography, stores,
+identity, and effects remain outside this pure gate.
+
 **主権 + 対量子 + governed** な secrets vault。kotoba を SSoT/台帳に、PQC を古典暗号へ
 **加法的(hybrid)** に重ね、全ての開示(reveal)/共有(share)/鍵操作を独立 Governor が検閲する。
 

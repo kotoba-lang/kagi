@@ -1,0 +1,38 @@
+(ns kagi.phase-conformance
+  (:require [kagi.phase :as phase])
+  (:export [main gate-check]))
+
+(def reason-type [:option :keyword])
+(def gate-type
+  [:record :kagi/phase-gate
+   [[:disposition :keyword] [:reason [:alias reason-type]]]])
+
+(defn reason-match-code [reason [:alias reason-type] expected :keyword] :i64
+  (match-option reason reason-type
+    (none (if (= expected :none) 1 0))
+    (some actual (if (= actual expected) 1 0))))
+
+(defn gate-check
+  [phase-value :i64 op :keyword disposition :keyword
+   expected-disposition :keyword expected-reason :keyword]
+  :i64
+  (let [actual (phase/gate phase-value op disposition)]
+    (if (= expected-disposition (record-get gate-type actual :disposition))
+      (if (= (reason-match-code (record-get gate-type actual :reason) expected-reason) 1)
+        42 2)
+      1)))
+
+(defn main [] :i64
+  (if (= 42 (gate-check 0 :item/create :commit :hold :phase-disabled))
+    (if (= 42 (gate-check 1 :item/create :commit :commit :none))
+      (if (= 42 (gate-check 1 :share/grant :commit :escalate :phase-approval))
+        (if (= 42 (gate-check 2 :share/grant :commit :commit :none))
+          (if (= 42 (gate-check 3 :share/revoke :commit :commit :none))
+            (if (= 42 (gate-check 99 :item/rotate :commit :escalate :phase-approval))
+              (if (= 42 (gate-check 0 :unknown/op :hold :hold :none)) 42 7)
+              6)
+            5)
+          4)
+        3)
+      2)
+    1))
