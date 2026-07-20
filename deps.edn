@@ -14,7 +14,7 @@
         ;; vault-specific attribute adapter and enforcement point.
         io.github.kotoba-lang/security
         {:git/url "https://github.com/kotoba-lang/security.git"
-         :git/sha "9316629ed15437ef1cf0f93b7f98e7cb31ef91d2"}
+         :git/sha "23caaefa6ca35904f9d0c2dc0cbb3bec91ae8956"}
         ;; Canonical receipt bytes for signed incident-response evidence.
         io.github.kotoba-lang/dag-cbor
         {:git/url "https://github.com/kotoba-lang/dag-cbor.git"
