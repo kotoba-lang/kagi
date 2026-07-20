@@ -1,5 +1,6 @@
-{:adoption/version 1 :consumer/id :kagi
- :security/git-sha "9316629ed15437ef1cf0f93b7f98e7cb31ef91d2"
- :required-control-namespaces [kotoba.security.hardware kotoba.security.key-lifecycle]
- :security-sensitive-entrypoints [kagi.governor]
+{:adoption/version 2 :consumer/id :kagi
+ :security/git-sha "23caaefa6ca35904f9d0c2dc0cbb3bec91ae8956"
+ :required-control-namespaces [kotoba.security.abac kotoba.security.information-flow]
+ :security-sensitive-entrypoints
+ {kagi.governor [kotoba.security.abac kotoba.security.information-flow]}
  :exceptions []}
