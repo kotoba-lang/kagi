@@ -34,5 +34,7 @@ jobs:
           compiler_src="$(clojure -Spath -M:kotoba | tr ':' '\n' | grep '/compiler/' | head -1)"
           node scripts/verify-kotoba-phase.mjs target/kotoba/phase.mjs \
             target/kotoba/phase.wasm "$(dirname "$compiler_src")/runtime/browser-host.mjs"
+      - name: Verify shared security adoption
+        run: clojure -M -m kotoba.security.adoption
       - name: Run full repository tests
         run: clojure -M:test
