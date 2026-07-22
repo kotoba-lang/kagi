@@ -111,19 +111,30 @@
 (defn- ->long [x] (if (number? x) (long x) (Long/parseLong (str x))))
 
 (defn- read-remote-seq
-  "Current max :kagi.vault/seq on the server (0 if none / unreadable)."
+  "Current max :kagi.vault/seq on the server (0 if none). Transport and auth
+  failures propagate: treating an unreadable remote as empty would enable overwrite."
   [url id db-name]
-  (try (reduce max 0 (map (comp ->long first) (q! url id db-name seq-query)))
-       (catch Exception _ 0)))
+  (reduce max 0 (map (comp ->long first) (q! url id db-name seq-query))))
+
+(defn assert-expected-seq!
+  "Optimistic concurrency gate. Prevents a device from overwriting a snapshot
+  changed after its pull. nil retains explicit legacy/force-push semantics."
+  [expected actual]
+  (when (and (some? expected) (not= (long expected) (long actual)))
+    (throw (ex-info "cloud vault changed since pull"
+                    {:reason :sync-conflict :expected expected :actual actual})))
+  true)
 
 (defn push!
   "Upsert the local encrypted vault snapshot into the actor's cloud graph.
   Returns {:seq :bytes :graph :pod}."
-  [{:keys [id vault-path pod db-name]}]
+  [{:keys [id vault-path pod db-name expected-seq]}]
   (let [url  (or pod default-pod)
         db   (or db-name default-db-name)
         snap (slurp vault-path)                 ; already ciphertext-only
-        seq  (inc (read-remote-seq url id db))
+        remote-seq (read-remote-seq url id db)
+        _ (assert-expected-seq! expected-seq remote-seq)
+        seq  (inc remote-seq)
         eid  "kagi.vault:vault"
         tx   (into vault-schema-tx
                    [[:db/add eid :kagi.vault/id "vault"]
@@ -131,7 +142,8 @@
                     [:db/add eid :kagi.vault/seq seq]
                     [:db/add eid :kagi.vault/at (str (Instant/now))]])]
     (transact! url id db tx)
-    {:seq seq :bytes (count snap) :graph (cacao/canonical-graph (:did id) db) :pod url}))
+    {:seq seq :previous-seq remote-seq :bytes (count snap)
+     :graph (cacao/canonical-graph (:did id) db) :pod url}))
 
 (defn pull!
   "Fetch the latest cloud vault snapshot and write it to vault-path (after
