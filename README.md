@@ -65,6 +65,9 @@ bin/kagi whoami                       # 自分の did:key / IPNS graph
 bin/kagi identity-migrate             # identity 秘密鍵を Apple Keychain へ移す
 bin/kagi unlock-enable-keychain       # VMK unlock を Apple Keychain に追加
 bin/kagi unlock-status                # unlock envelope metadata を表示
+bin/kagi recovery create --out <dir> --threshold 3 --shares 5
+bin/kagi recovery verify <share.edn>...
+bin/kagi recovery get <item> <share.edn>...
 bin/kagi push                         # 暗号化済み vault snapshot を kotobase.net へ upsert
 bin/kagi pull                         # cloud の最新 snapshot を取得（local .bak を先に取る）
 bin/kagi sync                         # pull後のremote seq一致時だけpush（競合はfail-closed）
@@ -168,7 +171,7 @@ clojure -M:dev:cli <cmd>  # CLI（bin/kagi と同じ）
 >   actor `:authn` が CACAO を実検証し、失敗を `:hold` に送る。
 > - **メンバー登録/共有**: `:authn` が depth-1 self-mint 登録、実 identity 同士の PQC 共有。
 >
-> 検証: **56 tests / 348 assertions pass**(KEM 往復・署名 tamper reject・PQC 共有・KDF・
+> 検証: **58 tests / 357 assertions pass**(KEM 往復・署名 tamper reject・PQC 共有・KDF・
 > 台帳改竄検知・CACAO 詐称/改竄 reject・authn 強制)。CLJS/WASM provider(kotoba-crypto Rust)と
 > `KotobaStore` は注入式 `SealedBlockStore` と暗号文E2E contract testを持つ。CLIの既定は
 > local snapshot、cloud CLIは暗号化snapshot同期であり、B2/IPFS production adapterは段階導入。

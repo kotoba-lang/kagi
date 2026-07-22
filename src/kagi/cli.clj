@@ -28,6 +28,8 @@
             [kagi.secret-store :as secret-store]
             [kagi.clipboard :as clipboard]
             [kagi.unlock :as unlock]
+            [kagi.recovery :as recovery]
+            [kagi.recovery-io :as recovery-io]
             [kagi.sync :as sync]
             [kagi.import.onepassword :as import-1p])
   (:import [java.time Instant]
@@ -321,6 +323,36 @@
   (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))]
     (println (pr-str (unlock/status (:meta data))))))
 
+(defn- cmd-recovery-create [p args]
+  (let [out (or (arg-val args "--out") (die "recovery create requires --out DIR"))
+        k (parse-long* (arg-val args "--threshold") 3)
+        n (parse-long* (arg-val args "--shares") 5)]
+    (with-vault p
+      (fn [_ vmk]
+        (let [written (recovery-io/write-shares! out (recovery/split p vmk k n))]
+          (println (pr-str {:ok? true :threshold k :shares n
+                            :paths (mapv :path written) :secret? false})))))))
+
+(defn- cmd-recovery-verify [args]
+  (let [files (vec (drop 2 args))]
+    (when (empty? files) (die "usage: kagi recovery verify <share.edn>..."))
+    (recovery-io/combine-files files)
+    (println (pr-str {:ok? true :shares (count files) :secret? false}))))
+
+(defn- cmd-recovery-get [p id args]
+  (let [item-id (nth args 2 nil)
+        files (vec (drop 3 args))]
+    (when (or (nil? item-id) (empty? files))
+      (die "usage: kagi recovery get <item> <share.edn>..."))
+    (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))
+          vmk (recovery-io/combine-files files)
+          st (load-store (dissoc data :meta))
+          result (run-op! p id st vmk {:op :item/reveal :item-id item-id} :recovery-get)
+          plaintext (get-in result [:result :plaintext])]
+      (save-store! st (:meta data))
+      (if plaintext (print (String. ^bytes plaintext "UTF-8"))
+          (die "recovery reveal denied")))))
+
 ;; ───────── cloud sync (kotobase.net) ─────────
 
 (defn- cmd-push [id args]
@@ -362,6 +394,9 @@ kagi — 自己主権・対量子(PQC) secrets vault (op 相当)
   kagi unlock-enable-keychain [--ref keychain://service/account]
                             VMK unlock を OS keychain に追加(passphrase は recovery として残す)
   kagi unlock-status        VMK unlock methods を metadata のみ表示
+  kagi recovery create --out DIR [--threshold 3] [--shares 5]
+  kagi recovery verify <share.edn>...
+  kagi recovery get <item> <share.edn>...
   kagi push [--pod URL]     暗号化 vault を kotobase.net へ同期(cloud 永続化)
   kagi pull [--pod URL]     cloud の vault を取得(現ローカルは .bak に退避)
   kagi sync [--pod URL]     pull(あれば)→ push。iCloud Keychain 型 E2E 同期
@@ -395,6 +430,11 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
         "identity-migrate" (cmd-identity-migrate p id args)
         "unlock-enable-keychain" (cmd-unlock-enable-keychain p id args)
         "unlock-status" (cmd-unlock-status)
+        "recovery" (case (second args)
+                     "create" (cmd-recovery-create p args)
+                     "verify" (cmd-recovery-verify args)
+                     "get" (cmd-recovery-get p id args)
+                     (die "usage: kagi recovery create|verify|get ..."))
         "push"   (cmd-push id args)
         "pull"   (cmd-pull id args)
         "sync"   (cmd-sync id args)
