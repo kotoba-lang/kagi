@@ -30,9 +30,13 @@
             [kagi.unlock :as unlock]
             [kagi.recovery :as recovery]
             [kagi.recovery-io :as recovery-io]
+            [kagi.passkey :as passkey]
+            [kagi.passkey-bridge :as passkey-bridge]
             [kagi.sync :as sync]
             [kagi.import.onepassword :as import-1p])
   (:import [java.time Instant]
+           [java.awt Desktop Desktop$Action]
+           [java.net URI]
            [java.util UUID]))
 
 ;; Vault home resolution (ADR-2607170500). The vault MUST NOT live in a repo
@@ -323,6 +327,31 @@
   (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))]
     (println (pr-str (unlock/status (:meta data))))))
 
+(defn- cmd-unlock-enable-passkey [p]
+  (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))
+        vmk (unlock-vmk-auto p (:meta data))
+        st (load-store (dissoc data :meta))
+        bridge (passkey-bridge/start!
+                p {:timeout-seconds 120
+                   :on-input
+                   (fn [input]
+                     (let [result (passkey/consume-bridge-input input "127.0.0.1")
+                           wrap (unlock/passkey-prf-wrap
+                                 p vmk (:prf-output result)
+                                 (select-keys result [:rp-id :credential-id :prf-salt]))]
+                       (save-store! st (unlock/add-wrap (:meta data) wrap))
+                       {:enabled :passkey-prf :credential-id (:credential-id result)}))})]
+    (try
+      (if (and (Desktop/isDesktopSupported)
+               (.isSupported (Desktop/getDesktop) Desktop$Action/BROWSE))
+        (.browse (Desktop/getDesktop) (URI/create (:url bridge)))
+        (println "open in a browser:" (:url bridge)))
+      (let [result ((:await bridge))]
+        (if (= result :kagi.passkey-bridge/timeout)
+          (die "passkey registration timed out")
+          (println (pr-str {:ok? true :enabled :passkey-prf :secret? false}))))
+      (finally ((:stop bridge))))))
+
 (defn- cmd-recovery-create [p args]
   (let [out (or (arg-val args "--out") (die "recovery create requires --out DIR"))
         k (parse-long* (arg-val args "--threshold") 3)
@@ -394,6 +423,8 @@ kagi — 自己主権・対量子(PQC) secrets vault (op 相当)
   kagi unlock-enable-keychain [--ref keychain://service/account]
                             VMK unlock を OS keychain に追加(passphrase は recovery として残す)
   kagi unlock-status        VMK unlock methods を metadata のみ表示
+  kagi unlock-enable-passkey
+                            one-shot loopback bridgeでWebAuthn PRF unlockを追加
   kagi recovery create --out DIR [--threshold 3] [--shares 5]
   kagi recovery verify <share.edn>...
   kagi recovery get <item> <share.edn>...
@@ -430,6 +461,7 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
         "identity-migrate" (cmd-identity-migrate p id args)
         "unlock-enable-keychain" (cmd-unlock-enable-keychain p id args)
         "unlock-status" (cmd-unlock-status)
+        "unlock-enable-passkey" (cmd-unlock-enable-passkey p)
         "recovery" (case (second args)
                      "create" (cmd-recovery-create p args)
                      "verify" (cmd-recovery-verify args)

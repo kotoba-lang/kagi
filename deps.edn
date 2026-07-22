@@ -1,4 +1,4 @@
-{:paths ["src"]
+{:paths ["src" "web"]
  ;; langgraph-clj brings langchain-clj transitively (both zero-/single-dep, all
  ;; .cljc → portable to JVM / SCI / ClojureScript / GraalVM). The PQC primitives
  ;; (ML-KEM-768 / ML-DSA-65 / SLH-DSA) are provided on the JVM by BouncyCastle via
@@ -6,6 +6,7 @@
  ;; Rust provider instead (see src/kagi/crypto.cljc :: Provider seam).
  :deps {io.github.kotoba-lang/langgraph
         {:local/root "../langgraph"}
+        org.clojure/data.json {:mvn/version "2.5.0"}
         ;; 1Password 互換 keychain データモデル + 1PUX import(crypto/store 非依存、
         ;; ADR-2607023000)。kagi は kagitaba item を pr-str して DEK 封緘パイプラインに通す。
         io.github.kotoba-lang/kagitaba

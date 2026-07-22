@@ -7,8 +7,17 @@ button.addEventListener("click", async () => {
   button.disabled = true;
   status.textContent = "Waiting for authenticator…";
   try {
-    if (typeof window.kagiPasskeyBridge !== "function")
-      throw new Error("trusted kagi host bridge is unavailable");
+    if (typeof window.kagiPasskeyBridge !== "function") {
+      const token = location.hash.slice(1);
+      if (!token) throw new Error("trusted kagi host bridge is unavailable");
+      window.kagiPasskeyBridge = async (input) => {
+        const response = await fetch("/bridge", {method: "POST",
+          headers: {"content-type": "application/json", "x-kagi-token": token},
+          body: JSON.stringify(input), credentials: "omit", cache: "no-store"});
+        if (!response.ok) throw new Error("local kagi bridge rejected registration");
+      };
+      history.replaceState(null, "", location.pathname);
+    }
     const result = await registerPrf({credentials: navigator.credentials,
       rpId: location.hostname, userId: crypto.getRandomValues(new Uint8Array(32)),
       userName: "kagi-owner"});
