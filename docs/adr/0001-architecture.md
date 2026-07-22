@@ -54,8 +54,9 @@ CLI 実装は `./.kagi` ローカル vault を中心に動く。
 - KotobaStore は注入式 SealedBlockStore 境界を持ち、暗号化→blob/metadata分離→取得→復号を
   contract test で検証する。CLI の既定 backend は local `.kagi` snapshot、cloud CLIは
   暗号化snapshot同期。B2/IPFS production adapterは未実装。
-- Passkey PRF registration と Shamir recovery のCLI ceremonyは architecture target。
-  `kagi.recovery` はVMK用k-of-n分割・復元とset/integrity検証を実装済み。現CLI unlockは
+- Passkey PRF browser registration UIはarchitecture target。hostからPRF outputを受ける
+  VMK wrap/unlock APIと、Shamir recoveryのowner-only create/verify/get CLI ceremonyは実装済み。
+  `kagi.recovery` はVMK用k-of-n分割・復元とset/integrity検証を行う。通常のCLI unlockは
   master passphraseに加えてOS keychain device unlock envelopeをサポートする。
 
 ## Multi-device model

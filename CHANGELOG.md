@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0 — 2026-07-22
+
+- Add owner-only, exclusive-create recovery share files and CLI create/verify/get ceremony.
+- Keep reconstructed VMKs process-local and out of vault snapshots and command metadata.
+- Add host-adapter-ready WebAuthn PRF VMK wrap/unlock APIs.
+
 ## 0.2.0 — 2026-07-22
 
 - Add k-of-n Shamir VMK recovery shares with set and integrity validation.

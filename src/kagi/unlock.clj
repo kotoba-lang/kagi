@@ -10,6 +10,9 @@
 (def ^:private info-os-keychain (.getBytes "kagi/unlock/os-keychain/v1" "UTF-8"))
 (def ^:private info-passkey-prf (.getBytes "kagi/unlock/passkey-prf/v1" "UTF-8"))
 
+(defn- passkey-info ^bytes [rp-id credential-id]
+  (.getBytes (str "kagi/unlock/passkey-prf/v1\u0000" rp-id "\u0000" credential-id) "UTF-8"))
+
 (defn- b64 [^bytes b]
   (.encodeToString (Base64/getEncoder) b))
 
@@ -50,6 +53,26 @@
                :provider :apple-keychain
                :created-by :kagi-unlock-enable})))
 
+(defn passkey-prf-wrap
+  "Create a VMK envelope from WebAuthn PRF output supplied by the browser/host."
+  [p vmk ^bytes prf-output {:keys [rp-id credential-id] :as fields}]
+  (when-not (and (seq rp-id) (seq credential-id) (pos? (alength prf-output)))
+    (throw (ex-info "incomplete passkey PRF registration" {})))
+  (let [salt (crypto/rand-bytes p 16)
+        info (passkey-info rp-id credential-id)
+        kek (crypto/hkdf p prf-output salt info 32)
+        nonce (crypto/rand-bytes p 12)]
+    (merge fields {:method :passkey-prf :salt salt :nonce nonce
+                   :wrapped (crypto/aead-seal p kek nonce vmk info)
+                   :provider :webauthn-prf :created-by :passkey-registration})))
+
+(defn unlock-with-passkey-prf [p {:keys [method salt nonce wrapped rp-id credential-id]} ^bytes prf-output]
+  (when-not (= :passkey-prf method)
+    (throw (ex-info "not a passkey PRF envelope" {:method method})))
+  (let [info (passkey-info rp-id credential-id)
+        kek (crypto/hkdf p prf-output salt info 32)]
+    (crypto/aead-open p kek nonce wrapped info)))
+
 (defn add-wrap [meta wrap]
   (update meta :unlock/wraps (fnil conj []) wrap))
 
@@ -72,7 +95,7 @@
 
 (defn passkey-prf-envelope-shape []
   {:method :passkey-prf
-   :status :planned
+   :status :host-adapter-ready
    :fields [:rp-id :credential-id :salt :nonce :wrapped]
    :flow ["navigator.credentials.create with prf extension"
           "navigator.credentials.get returns PRF output"

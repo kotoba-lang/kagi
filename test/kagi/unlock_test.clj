@@ -23,6 +23,20 @@
   (testing "passkey PRF support is represented as an envelope shape, not a secret"
     (let [shape (unlock/passkey-prf-envelope-shape)]
       (is (= :passkey-prf (:method shape)))
-      (is (= :planned (:status shape)))
+      (is (= :host-adapter-ready (:status shape)))
       (is (some #{:credential-id} (:fields shape)))
       (is (not (contains? shape :secret))))))
+
+(deftest passkey-prf-vmk-wrap-roundtrip
+  (let [p (crypto/jvm-provider)
+        vmk (crypto/rand-bytes p 32)
+        prf (crypto/rand-bytes p 32)
+        wrap (unlock/passkey-prf-wrap p vmk prf
+                                      {:rp-id "vault.example"
+                                       :credential-id "synthetic-credential"})]
+    (is (= :passkey-prf (:method wrap)))
+    (is (= (seq vmk) (seq (unlock/unlock-with-passkey-prf p wrap prf))))
+    (is (thrown? Exception
+                 (unlock/unlock-with-passkey-prf p (assoc wrap :rp-id "evil.example") prf)))
+    (is (thrown? Exception
+                 (unlock/unlock-with-passkey-prf p wrap (crypto/rand-bytes p 32))))))
