@@ -40,6 +40,43 @@
       (store/block-put! st "cid:x" b)
       (is (= (seq b) (seq (store/block-get st "cid:x")))))))
 
+(defn- fake-db-api [state]
+  {:transact! (fn [_ tx]
+                (doseq [rec tx]
+                  (cond
+                    (:item/id rec) (swap! state assoc-in [:items (:item/id rec)] rec)
+                    (:member/did rec) (swap! state assoc-in [:members (:member/did rec)] rec)
+                    (:grant/id rec) (swap! state assoc-in [:grants (:grant/id rec)] rec)
+                    (:ledger/seq rec) (swap! state update :ledger (fnil conj []) rec)))
+                tx)
+   :pull (fn [_ _ selector]
+           (let [[attr value] selector]
+             (case attr
+               :item/id (get-in @state [:items value])
+               :member/did (get-in @state [:members value])
+               nil)))
+   :q (fn [& _] [])})
+
+(deftest kotoba-metadata-and-sealed-block-e2e
+  (testing "encrypted bytes cross the SealedBlockStore boundary while Kotoba stores metadata"
+    (let [db (atom {})
+          blocks (store/memory-sealed-block-store)
+          st (store/kotoba-store (fake-db-api db) ::connection blocks)
+          p (crypto/jvm-provider)
+          aad (.getBytes "fixture-item" "UTF-8")
+          plaintext (.getBytes "synthetic-not-a-real-secret" "UTF-8")
+          sealed (crypto/seal-item p plaintext aad)
+          dek (:dek sealed)
+          cid "cid:fixture-ciphertext"]
+      (store/block-put! st cid (:ciphertext sealed))
+      (store/put-item! st #:item{:id "fixture" :cid cid :nonce (:nonce sealed)})
+      (let [metadata (store/item st "fixture")
+            restored (assoc sealed :ciphertext (store/block-get st (:item/cid metadata)))]
+        (is (= cid (:item/cid metadata)))
+        (is (= (seq plaintext)
+               (seq (crypto/open-item p dek (:nonce restored)
+                                      (:ciphertext restored) aad))))))))
+
 (deftest append-chained-ledger-survives-real-concurrent-writers
   (testing "append-chained-ledger! (not a separate `(ledger s)` read +
             make-entry + append-ledger!, which kagi.operation used to do)

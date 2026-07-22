@@ -13,9 +13,6 @@
 (defn- b64 [^bytes b]
   (.encodeToString (Base64/getEncoder) b))
 
-(defn- unb64 ^bytes [^String s]
-  (.decode (Base64/getDecoder) s))
-
 (defn new-device-secret
   "Return a printable secret suitable for OS keychain storage."
   [p]
