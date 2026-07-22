@@ -38,5 +38,7 @@ jobs:
         run: clojure -M -m kotoba.security.adoption
       - name: Run full repository tests
         run: clojure -M:test
+      - name: Test WebAuthn PRF browser adapter
+        run: node --test web/*.test.mjs
       - name: Lint source and tests
         run: clojure -M:lint

@@ -12,6 +12,6 @@ recovery material, or plaintext secrets. Use synthetic reproductions.
 
 ## Release status
 
-`v0.3.0` is a technical preview, not an independently audited password-manager release.
+`v0.4.0` is a technical preview, not an independently audited password-manager release.
 Production adoption requires an external cryptography/application-security review and an
 organization-specific recovery drill.

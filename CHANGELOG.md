@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 — 2026-07-22
+
+- Add WebAuthn PRF browser registration/authentication adapter and minimal accessible UX.
+- Add a strict browser-to-JVM base64url bridge with RP, credential, salt and length validation.
+- Persist only the public PRF salt/credential metadata; PRF output remains ephemeral secret input.
+- Run browser adapter tests in CI.
+
 ## 0.3.0 — 2026-07-22
 
 - Add owner-only, exclusive-create recovery share files and CLI create/verify/get ceremony.
