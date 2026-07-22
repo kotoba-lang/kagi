@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 — 2026-07-22
+
+- Add `kagi unlock-enable-passkey` with a loopback-only one-shot browser bridge.
+- Require exact Origin and 256-bit token binding; reject replay and expire after 120 seconds.
+- Serve the Passkey UI with no-store and restrictive Content Security Policy headers.
+- Add real localhost HTTP integration coverage for hostile Origin and replay attempts.
+
 ## 0.4.0 — 2026-07-22
 
 - Add WebAuthn PRF browser registration/authentication adapter and minimal accessible UX.
