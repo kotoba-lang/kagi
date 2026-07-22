@@ -1,8 +1,8 @@
 # ADR-0001: kagi-clj architecture（actor 化された PQC vault）
 
-**Status**: proposed · **Date**: 2026-06-27 · **Deciders**: Jun Kawasaki
+**Status**: accepted / implemented through v0.5.0 · **Date**: 2026-06-27 · **Last verified**: 2026-07-23 · **Deciders**: Jun Kawasaki
 
-正本は superproject の `90-docs/adr/2606272330-kagi-clj-pqc-vault.md`。本書はリポ内サマリ。
+正本は superproject の `90-docs/adr/2606272330-kagi-clj-pqc-vault.edn`。本書はリポ内サマリ。
 
 ## Decision
 
@@ -35,7 +35,7 @@
 
 ## Current implementation status
 
-CLI 実装は `./.kagi` ローカル vault を中心に動く。
+CLI 実装は `$KAGI_HOME`（既定 `~/.kagi`）のローカル vaultを正とし、暗号化snapshotをcloudへ同期する。
 
 - `vault.edn`: 暗号文 item、wrap 済み DEK、grant envelope、ledger を保存する。平文 item と
   raw VMK は保存しない。
@@ -92,11 +92,11 @@ Implemented:
 - `env://NAME`: read-only process env bridge.
 - in-memory provider for tests.
 
-Planned:
+Platform follow-ups:
 
 - Android Keystore provider.
 - Windows Credential Manager provider.
-- passkey PRF backed VMK unwrap UI/registration.
+- Linux Secret Service provider。
 
 ## Device unlock envelopes
 
@@ -119,12 +119,12 @@ Unlock order:
 1. `KAGI_MASTER` があれば既存 Argon2id envelope で VMK unwrap。
 2. 無ければ `:os-keychain` envelope の `:ref` を解決し、device unlock secret から
    `HKDF(secret, salt, "kagi/unlock/os-keychain/v1")` で KEK を作り VMK unwrap。
-3. keychain unlock が使えなければ端末 prompt / recovery に fallback。
+3. keychain unlock が使えなければ端末 prompt / Shamir recovery に fallback。
 
 `kagi unlock-enable-keychain` は一度だけ master passphrase を要求し、device unlock secret
 を Apple Keychain に保存して `:unlock/wraps` を追加する。結果は metadata only。
 
-Passkey/WebAuthn PRF は同じ envelope 形に載せる:
+Passkey/WebAuthn PRF はone-shot loopback bridgeで登録し、同じenvelope形に載せる:
 
 ```edn
 {:method :passkey-prf
@@ -161,9 +161,32 @@ approval-gated reveal:
 |---|---|---|
 | `.env` credential leakage | manimani stores refs only | remove legacy `*_PASS` usage |
 | identity file theft | SecretStore + Apple Keychain provider | migrate all identities; add Android/Windows providers |
-| master passphrase exposure | OS keychain device unlock envelope; passphrase stays recovery | passkey PRF registration UX |
+| master passphrase exposure | OS keychain + WebAuthn PRF unlock envelope; passphrase stays recovery | real-authenticator compatibility matrix |
 | device loss | device identity + grant/revoke model | GUI grant/revoke and rotate workflow |
 | HNDL / quantum harvest | X25519 + ML-KEM-768, Ed25519 + ML-DSA-65 | external audit |
 | memory scraping | short-lived CLI processes | zeroization / hardened reveal process |
 | sync tampering | hash-chain + hybrid signatures | KotobaStore/sealed-block production sync |
 | phishing/autofill | no autofill surface | browser extension hardening not implemented |
+
+## Implementation closure（v0.5.0、2026-07-23）
+
+本ADRの中核decisionは実装済みと判定する。`v0.1.0`〜`v0.5.0`で次をreleaseした。
+
+- hybrid PQC、Governor、CACAO、hybrid署名hash-chain ledger、暗号化vault CLI。
+- 注入式KotobaStore / SealedBlockStore境界とciphertext E2E contract。
+- cloud snapshot同期とremote sequence競合のfail-closed検知。
+- Shamir k-of-n recovery、owner-only share ceremony、端末紛失recovery drill。
+- Apple Keychain custody、WebAuthn PRF envelope、browser UX、one-shot loopback bridge。
+- 1PUX import（kagitaba）、ZIP resource limits、匿名化互換fixture。
+
+最終検証は **60 tests / 369 assertions、browser 3 tests、lint 0 errors / 0 warnings**。
+CIはJDK 24でtest・lint・browser adapterを実行する。
+
+ADRをcloseするとは開発停止ではなく、architecture decisionがコードとreleaseで実証されたことを指す。
+以下はdecision未実装ではなく、production assurance / platform expansionとして別ADR・issueで扱う。
+
+- 独立第三者による暗号・application security監査。
+- 実browser / platform / roaming authenticator互換性マトリクス。
+- B2/IPFS production SealedBlockStore adapter、item-level sync conflict merge。
+- Android Keystore / Windows Credential Manager / Linux Secret Service。
+- memory zeroization、autofill/phishing defense、GUI device grant/revoke。
