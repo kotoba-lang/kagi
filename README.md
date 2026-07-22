@@ -67,7 +67,7 @@ bin/kagi unlock-enable-keychain       # VMK unlock を Apple Keychain に追加
 bin/kagi unlock-status                # unlock envelope metadata を表示
 bin/kagi push                         # 暗号化済み vault snapshot を kotobase.net へ upsert
 bin/kagi pull                         # cloud の最新 snapshot を取得（local .bak を先に取る）
-bin/kagi sync                         # pull-if-newer してから push（last-writer-wins）
+bin/kagi sync                         # pull後のremote seq一致時だけpush（競合はfail-closed）
 ```
 
 - `bin/kagi` は `clojure -M:dev:cli` のラッパ（PQC は JDK24 標準 provider を使うため bb 不可）。
@@ -94,7 +94,7 @@ kotobase.net は ciphertext しか保持せず、master passphrase / OS-keychain
 ```bash
 bin/kagi push   # 自分の graph kotobase/db/<did>/kagi-vault へ暗号化 snapshot を upsert
 bin/kagi pull   # cloud から最新 snapshot を取得して local vault を置換（先に .bak へ退避）
-bin/kagi sync   # pull-if-newer → push（:kagi.vault/seq で last-writer-wins）
+bin/kagi sync   # pull → optimistic seq check → push（途中のremote更新は競合として拒否）
 ```
 
 - 認可は depth-1 の自己発行 CACAO（actor が自分の DID を graph に持つので、
@@ -168,7 +168,7 @@ clojure -M:dev:cli <cmd>  # CLI（bin/kagi と同じ）
 >   actor `:authn` が CACAO を実検証し、失敗を `:hold` に送る。
 > - **メンバー登録/共有**: `:authn` が depth-1 self-mint 登録、実 identity 同士の PQC 共有。
 >
-> 検証: **54 tests / 339 assertions pass**(KEM 往復・署名 tamper reject・PQC 共有・KDF・
+> 検証: **56 tests / 348 assertions pass**(KEM 往復・署名 tamper reject・PQC 共有・KDF・
 > 台帳改竄検知・CACAO 詐称/改竄 reject・authn 強制)。CLJS/WASM provider(kotoba-crypto Rust)と
 > `KotobaStore` は注入式 `SealedBlockStore` と暗号文E2E contract testを持つ。CLIの既定は
 > local snapshot、cloud CLIは暗号化snapshot同期であり、B2/IPFS production adapterは段階導入。

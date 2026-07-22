@@ -338,9 +338,9 @@
 
 (defn- cmd-sync [id args]
   (let [pod (not-empty (arg-val args "--pod"))
-        pulled (try (sync/pull! {:id id :vault-path vault-path :pod pod})
-                    (catch Exception _ {:seq nil}))
-        pushed (sync/push! {:id id :vault-path vault-path :pod pod})]
+        pulled (sync/pull! {:id id :vault-path vault-path :pod pod})
+        pushed (sync/push! {:id id :vault-path vault-path :pod pod
+                            :expected-seq (or (:seq pulled) 0)})]
     (println (pr-str {:ok? true :pulled (:seq pulled) :pushed (:seq pushed) :secret? false}))))
 
 (defn- help []

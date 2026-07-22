@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 — 2026-07-22
+
+- Add k-of-n Shamir VMK recovery shares with set and integrity validation.
+- Add optimistic cloud sequence checks so `kagi sync` cannot silently overwrite
+  a snapshot changed after pull.
+- Remove the sync path that converted pull/network errors into an unsafe push.
+
 ## 0.1.0 — 2026-07-22
 
 - Hybrid ML-KEM-768/X25519 encryption and ML-DSA-65/Ed25519 signatures.
