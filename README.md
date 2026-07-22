@@ -171,7 +171,7 @@ clojure -M:dev:cli <cmd>  # CLI（bin/kagi と同じ）
 >   actor `:authn` が CACAO を実検証し、失敗を `:hold` に送る。
 > - **メンバー登録/共有**: `:authn` が depth-1 self-mint 登録、実 identity 同士の PQC 共有。
 >
-> 検証: **58 tests / 357 assertions pass**(KEM 往復・署名 tamper reject・PQC 共有・KDF・
+> 検証: **59 tests / 362 assertions + 3 browser tests pass**(KEM 往復・署名 tamper reject・PQC 共有・KDF・
 > 台帳改竄検知・CACAO 詐称/改竄 reject・authn 強制)。CLJS/WASM provider(kotoba-crypto Rust)と
 > `KotobaStore` は注入式 `SealedBlockStore` と暗号文E2E contract testを持つ。CLIの既定は
 > local snapshot、cloud CLIは暗号化snapshot同期であり、B2/IPFS production adapterは段階導入。
