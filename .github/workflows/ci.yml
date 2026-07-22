@@ -38,3 +38,5 @@ jobs:
         run: clojure -M -m kotoba.security.adoption
       - name: Run full repository tests
         run: clojure -M:test
+      - name: Lint source and tests
+        run: clojure -M:lint

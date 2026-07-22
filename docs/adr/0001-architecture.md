@@ -51,8 +51,9 @@ CLI 実装は `./.kagi` ローカル vault を中心に動く。
   だけでは十分な custody ではない。`kagi.secret-store/SecretStore` と Apple Keychain provider
   を追加したため、新規 identity は `KAGI_IDENTITY_STORE=keychain` で OS keychain custody に
   できる。既存 identity は `kagi identity-migrate` で移行する。
-- KotobaStore / SealedBlockStore sync は設計済みだが、CLI の既定 backend はまだ local
-  `.kagi` snapshot。
+- KotobaStore は注入式 SealedBlockStore 境界を持ち、暗号化→blob/metadata分離→取得→復号を
+  contract test で検証する。CLI の既定 backend は local `.kagi` snapshot、cloud CLIは
+  暗号化snapshot同期。B2/IPFS production adapterは未実装。
 - Passkey PRF と Shamir recovery は architecture target。現 CLI unlock は master passphrase
   に加えて OS keychain device unlock envelope をサポートする。
 

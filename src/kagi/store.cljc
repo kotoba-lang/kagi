@@ -33,6 +33,19 @@
   ;; したところ両方 :ledger/seq 0 になり verify-chain が :broken-at 1 を返した)。
   (append-chained-ledger! [s build-fn]))
 
+(defprotocol SealedBlockStore
+  "Ciphertext-only content-addressed block boundary. Implementations may use
+  B2/IPFS/Kotoba, but must never receive plaintext or raw VMKs."
+  (sealed-get [s cid])
+  (sealed-put! [s cid bytes]))
+
+(defrecord MemorySealedBlockStore [blocks]
+  SealedBlockStore
+  (sealed-get [_ cid] (get @blocks cid))
+  (sealed-put! [s cid bytes] (swap! blocks assoc cid bytes) s))
+
+(defn memory-sealed-block-store [] (->MemorySealedBlockStore (atom {})))
+
 ;; ───────── MemStore(依存ゼロ、.cljc 可搬) ─────────
 
 (defrecord MemStore [a]
@@ -74,7 +87,7 @@
 ;; `langchain.db/api`(in-process Datomic)。conn は CACAO 自己発行(kagi.identity)。
 ;; schema は `kagi.vault/schema`。ここは shape のみ示す(配線は段階導入)。
 
-(defrecord KotobaStore [db-api conn]
+(defrecord KotobaStore [db-api conn sealed-block-store]
   Store
   (member [_ did] ((:pull db-api) conn '[*] [:member/did did]))
   (put-member! [s rec] ((:transact! db-api) conn [rec]) s)
@@ -90,8 +103,15 @@
   (put-item! [s rec] ((:transact! db-api) conn [rec]) s)
   (put-grant! [s rec] ((:transact! db-api) conn [rec]) s)
   (revoke-grant! [s gid] ((:transact! db-api) conn [{:grant/id gid :grant/revoked true}]) s)
-  (block-get [_ _cid] (throw (ex-info "SealedBlockStore 配線は段階導入" {})))
-  (block-put! [_ _cid _bytes] (throw (ex-info "SealedBlockStore 配線は段階導入" {})))
+  (block-get [_ cid]
+    (when-not sealed-block-store
+      (throw (ex-info "SealedBlockStore is required for ciphertext access" {:cid cid})))
+    (sealed-get sealed-block-store cid))
+  (block-put! [s cid bytes]
+    (when-not sealed-block-store
+      (throw (ex-info "SealedBlockStore is required for ciphertext access" {:cid cid})))
+    (sealed-put! sealed-block-store cid bytes)
+    s)
   (append-ledger! [_ fact] ((:transact! db-api) conn [fact]) fact)
   ;; best-effort: the abstract :db-api transact! offers no compare-and-swap
   ;; primitive to build this atomically the way MemStore's swap! does, so a
@@ -106,7 +126,10 @@
       ((:transact! db-api) conn [entry])
       entry)))
 
-(defn kotoba-store [db-api conn] (->KotobaStore db-api conn))
+(defn kotoba-store
+  ([db-api conn] (->KotobaStore db-api conn nil))
+  ([db-api conn sealed-block-store]
+   (->KotobaStore db-api conn sealed-block-store)))
 
 ;; schema を re-export(配線側が参照)
 (def schema vault/schema)
