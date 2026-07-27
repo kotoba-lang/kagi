@@ -200,25 +200,77 @@
 (def kotobase-pin-resource "kotoba://can/kotobase:pin")
 (def kotobase-operator-did "did:web:kotobase.net")
 
-(defn- ->kotobase-wire [payload sig-b64]
-  {"p" (cond-> {"iss" (:iss payload) "aud" (:aud payload) "iat" (:issued-at payload)
+(defn- ->kotobase-wire
+  "The wire envelope the LIVE apex accepts.
+
+  `h` is `{\"t\" \"caip122\"}`. An earlier comment here asserted the apex wanted
+  NO `h` field at all; that was true of the pre-cutover pod and is why `kagi
+  push` 401'd after the 2026-07-08 apex cutover. The reference is
+  `kotoba-lang/kotobase-client`, which authenticates against this apex on
+  every request today — when this file and that one disagree, that one is
+  right, because it is the one being exercised."
+  [payload sig-b64]
+  {"h" {"t" "caip122"}
+   "p" (cond-> {"iss" (:iss payload) "aud" (:aud payload) "iat" (:issued-at payload)
                 "nonce" (:nonce payload) "domain" (:domain payload)
                 "version" (:version payload) "resources" (:resources payload)}
          (:expiry payload) (assoc "exp" (:expiry payload)))
    "s" {"t" "EdDSA" "s" (or sig-b64 "")}})
 
+(defn graph-scope
+  "The `kotoba://graph/<issuer-did>` scope the apex requires.
+
+  NOT a graph CID. The apex checks that the CACAO's graph scope EQUALS the
+  ISSUER DID and rejects a CID-shaped scope with \"CACAO graph scope does not
+  include issuer DID\". The request body still names the canonical graph CID;
+  only the CACAO scope is the DID."
+  [did]
+  (str "kotoba://graph/" did))
+
 (defn mint-kotobase
-  "Mint a CACAO the live kotobase.net worker accepts. id = {:private-key :did};
-  opts {:aud :nonce :issued-at :expiry}. aud defaults to did:web:kotobase.net."
-  [{:keys [private-key did]} {:keys [aud nonce issued-at expiry]}]
+  "Mint a CACAO the live kotobase.net apex accepts. id = {:private-key :did};
+  opts {:aud :nonce :issued-at :expiry}. aud defaults to did:web:kotobase.net.
+
+  TWO resources are required, and shipping only the first is why `kagi push`
+  answered 401 against the live apex:
+
+    kotoba://can/kotobase:pin     the capability
+    kotoba://graph/<issuer-did>   the scope, equal to the issuer DID
+
+  This file is a LOCAL COPY of a CACAO implementation that
+  `kotoba-lang/org-chainagnostic-cacao` owns, and it drifted from it exactly
+  as ADR-2607268000 said copies do — that ADR was written because ~25 repos
+  carried this file with a \"keep in sync\" comment and diverged anyway. The
+  graph scope is restored here to unblock sync; the copy itself is the bug
+  and is being removed in favour of the shared library."
+  [{:keys [private-key did]} {:keys [aud nonce issued-at expiry op-caps]
+                              :or {op-caps ["datom:read" "datom:transact" "tx:create"]}}]
   (let [payload {:iss did :aud (or aud kotobase-operator-did)
                  :nonce nonce :issued-at issued-at :expiry expiry
                  :domain "kotobase.net" :version "1"
-                 :resources [kotobase-pin-resource]}
+                 :resources (into [kotobase-pin-resource]
+                                  (conj (mapv #(str "kotoba://can/" %) op-caps)
+                                        (graph-scope did)))}
         msg     (siwe-message payload)
         sig     (ed-sign private-key (.getBytes ^String msg "UTF-8"))
         sig-b64 (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) sig)]
     (.encodeToString (Base64/getEncoder) (cbor-bytes (->kotobase-wire payload sig-b64)))))
+
+(defn decode-wire
+  "Decode a minted CACAO into its three wire parts, WITHOUT verifying.
+
+  For inspection and for tests that assert the shape the live apex accepts.
+  Verification is `verify`; this deliberately does not do it, so a test can
+  assert what a REJECTED token looked like."
+  [cacao-b64]
+  (let [wire (first (cbor-read (.decode (Base64/getDecoder) ^String cacao-b64) 0))
+        p    (get wire "p")]
+    {:header-type (get-in wire ["h" "t"])
+     :signature   (get-in wire ["s" "s"])
+     :payload     {:iss (get p "iss") :aud (get p "aud") :issued-at (get p "iat")
+                   :expiry (get p "exp") :nonce (get p "nonce")
+                   :domain (get p "domain") :version (get p "version")
+                   :statement (get p "statement") :resources (get p "resources")}}))
 
 (defn verify
   "自己発行 cacao を検証 → {:ok? :iss :aud :resources :expired? :replay?}。SIWE を再構成し

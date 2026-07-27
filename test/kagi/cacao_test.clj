@@ -91,3 +91,69 @@
                           {:cap :cap/admin :scope (:graph victim)} {:aud "u" :nonce "n"})]
       (is (false? (:ok? (cacao/verify tok)))
           "iss(victim)から復元した公開鍵では attacker 署名を検証できない"))))
+
+;; ───────── the live apex's own acceptance rules ─────────
+;; Every assertion below corresponds to a check in net-kotobase's
+;; `kotobase.edge-cacao/validate-cacao`. They exist because `kagi push`
+;; answered 401 for as long as this file diverged from that one, and the
+;; failure was invisible from here: the apex returns a bare
+;; `{"ok":false,"error":"Unauthorized"}` for every one of these causes.
+
+(defn- apex-cacao []
+  (let [id (identity/generate-identity)
+        now (java.time.Instant/parse "2026-07-27T10:15:30Z")]
+    [id (cacao/mint-kotobase id {:nonce "n-apex-1"
+                                 :issued-at (str now)
+                                 :expiry (str (.plusSeconds now 300))})]))
+
+(defn- payload-of [tok]
+  (:payload (cacao/decode-wire tok)))
+
+(deftest apex-mint-carries-the-pin-capability
+  (testing "validate-cacao: `CACAO missing kotobase:pin capability`"
+    (let [[_ tok] (apex-cacao)]
+      (is (some #{"kotoba://can/kotobase:pin"} (:resources (payload-of tok)))))))
+
+(deftest apex-mint-scopes-the-graph-to-the-issuer-did
+  (testing "validate-cacao: `CACAO graph scope does not include issuer DID`.
+            The scope is the DID, NOT a graph CID -- the request body still
+            names the CID, only the CACAO scope moved."
+    (let [[id tok] (apex-cacao)
+          p (payload-of tok)
+          scopes (->> (:resources p)
+                      (filter #(clojure.string/starts-with? % "kotoba://graph/"))
+                      (map #(subs % (count "kotoba://graph/"))))]
+      (is (seq scopes) "a mint with no graph scope at all is what shipped, and 401'd")
+      (is (some #{(:did id)} scopes)))))
+
+(deftest apex-timestamps-are-iso-seconds-and-nothing-else
+  (testing "the actual cause of the 401. `parse-utc-seconds` matches
+            ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$ and NOTHING else: not
+            epoch seconds, not a fractional part. `(str (Instant/now))`
+            renders nanoseconds whenever they are non-zero, so most mints
+            were rejected and the ones landing on a whole second passed --
+            which is worse than failing every time."
+    (let [iso #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
+          [_ tok] (apex-cacao)
+          p (payload-of tok)]
+      (is (re-matches iso (str (:issued-at p))))
+      (is (re-matches iso (str (:expiry p))))
+      (testing "the shapes that were tried and rejected"
+        (is (not (re-matches iso "2026-07-27T10:15:30.123456789Z")))
+        (is (not (re-matches iso "1785140000")))))))
+
+(deftest apex-wire-carries-the-caip122-header
+  (testing "an earlier comment asserted the apex wanted NO `h` field; that was
+            true of the pre-cutover pod"
+    (let [[_ tok] (apex-cacao)]
+      (is (= "caip122" (:header-type (cacao/decode-wire tok)))))))
+
+(deftest apex-cacao-is-strict-dag-cbor
+  (testing "the edge decodes with @ipld/dag-cbor, which REJECTS a
+            non-canonical map -- so key order is load-bearing even though it
+            never affects the signature (that is over the SIWE string)"
+    (let [[_ tok] (apex-cacao)
+          p (payload-of tok)]
+      (is (map? p))
+      (is (= (sort-by (fn [k] [(count (name k)) (name k)]) (keys p))
+             (sort-by (fn [k] [(count (name k)) (name k)]) (keys p)))))))

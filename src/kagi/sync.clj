@@ -24,6 +24,7 @@
            [java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
             HttpResponse$BodyHandlers]
            [java.time Instant]
+           [java.time.temporal ChronoUnit]
            [java.util UUID]))
 
 (def default-pod "https://kotobase.net")
@@ -71,11 +72,26 @@
 ;; in the Authorization header AND the body cacao_b64 (the tenant-cap write gate
 ;; wants both).
 
-(defn- fresh-cacao [id]
-  (let [now (Instant/now)]
+(defn- fresh-cacao
+  "A CACAO for exactly one apex call.
+
+  `iat`/`exp` must be ISO-8601 SECONDS precision — exactly
+  `YYYY-MM-DDTHH:MM:SSZ`. The apex's `parse-utc-seconds` matches that regex
+  and NOTHING else: it accepts neither epoch seconds nor a fractional part,
+  and a value it cannot parse becomes `invalid CACAO iat` -> 401.
+
+  This is why `kagi push` was failing. `(str (Instant/now))` renders
+  nanoseconds whenever they are non-zero (`2026-07-27T10:15:30.123456789Z`),
+  so most mints did not match, and the ones that happened to land on a whole
+  second did. `truncatedTo SECONDS` makes it unconditional.
+
+  A fresh nonce per call is mandatory — the edge records nonces for replay
+  protection, so reusing one across a retry 401s."
+  [id]
+  (let [now (.truncatedTo (Instant/now) ChronoUnit/SECONDS)]
     (cacao/mint-kotobase id {:nonce (str (UUID/randomUUID))
                              :issued-at (str now)
-                             :expiry (str (.plusSeconds now 3600))})))
+                             :expiry (str (.plusSeconds now 300))})))
 
 (defn- xrpc! [url nsid id body]
   (let [c    (fresh-cacao id)
