@@ -16,7 +16,8 @@
     kagi rotate <name>              # DEK を回転(再封緘)
     kagi log                        # 監査台帳(hybrid 署名 + ハッシュ鎖)を検証して表示
     kagi whoami                     # 自分の did:key / IPNS graph"
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [langgraph.graph :as g]
             [kagi.operation :as op]
             [kagi.store :as store]
@@ -25,6 +26,7 @@
             [kagi.ledger :as ledger]
             [kagi.identity :as identity]
             [kagi.persist :as persist]
+            [kagi.device :as device]
             [kagi.secret-store :as secret-store]
             [kagi.clipboard :as clipboard]
             [kagi.unlock :as unlock]
@@ -323,6 +325,92 @@
                       :secret? false
                       :passphrase-recovery? true}))))
 
+(defn- cmd-device-request
+  "On the NEW device. Prints the request to carry to the enrolled device, and
+  the FINGERPRINT to read aloud. No vault is needed here — this machine has
+  nothing yet, which is the point."
+  [p args]
+  (let [{:keys [request fingerprint]} (device/make-request!
+                                       p {:label (arg-val args "--label")})
+        out (or (arg-val args "--out") "device-request.edn")]
+    (spit out (pr-str request))
+    (println (pr-str {:ok? true :wrote out
+                      :device-id (:device/id request)
+                      :fingerprint fingerprint
+                      :next (str "enrolled 端末で: kagi device grant " out
+                                 " --fingerprint " fingerprint)}))))
+
+(defn- cmd-device-grant
+  "On the ENROLLED device. Encapsulates the VMK to the requesting device.
+
+  `--fingerprint` is REQUIRED and must match what the new device printed. It
+  is the only thing that catches a substituted public key, and a check that
+  can be skipped is not a check."
+  [p args]
+  ;; args are ["device" "grant" "<file>" ...] -- the file is the THIRD element.
+  (let [file (or (nth args 2 nil) (die "usage: kagi device grant <request.edn> --fingerprint FP"))
+        request (edn/read-string (slurp file))
+        confirmed (arg-val args "--fingerprint")
+        data (or (persist/load* vault-path) (die "no vault — run: kagi init"))
+        vmk (unlock-vmk-auto p (:meta data))
+        ttl (some-> (arg-val args "--ttl") Long/parseLong)
+        grant (try
+                (device/make-grant p vmk request confirmed
+                                   {:ttl-sec (or ttl device/default-ttl-sec)})
+                (catch clojure.lang.ExceptionInfo e
+                  (die (str "device grant refused: "
+                            (pr-str (:device/errors (ex-data e)))))))
+        out (or (arg-val args "--out") "device-grant.edn")]
+    (spit out (pr-str grant))
+    (println (pr-str {:ok? true :wrote out
+                      :device-id (:grant/device-id grant)
+                      :expires-at (:grant/expires-at grant)
+                      :secret? false
+                      :note "grant は短命・単回限り。使ったら消すこと"}))))
+
+(defn- cmd-device-accept
+  "On the NEW device. Recovers the VMK, adds this machine's own keychain wrap,
+  records the device, and writes the vault. The grant is not needed again."
+  [p args]
+  (let [file (or (nth args 2 nil) (die "usage: kagi device accept <grant.edn>"))
+        grant (edn/read-string (slurp file))
+        data (or (persist/load* vault-path)
+                 (die "no vault — run: kagi pull first (grant unlocks it, it does not create it)"))
+        {:keys [vmk wrap device-id]}
+        (try (device/accept-grant! p grant {})
+             (catch clojure.lang.ExceptionInfo e
+               (die (str "device accept refused: " (pr-str (:device/errors (ex-data e)))))))
+        meta (-> (:meta data)
+                 (unlock/add-wrap wrap)
+                 (device/register {:device-id device-id
+                                   :label (:grant/label grant)
+                                   :fingerprint (:grant/fingerprint grant)
+                                   :wrap-ref (:ref wrap)}))
+        st (load-store (dissoc data :meta))]
+    (save-store! st meta)
+    (println (pr-str {:ok? true :device-id device-id
+                      :unlock (unlock/status meta)
+                      :secret? false
+                      :next (str "この grant ファイルを削除すること: " file)}))
+    ;; the VMK is live in this process only; nothing writes it out
+    (when vmk :ok)))
+
+(defn- cmd-device-ls [_p]
+  (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))]
+    (println (pr-str (device/status (:meta data))))))
+
+(defn- cmd-device-revoke [_p args]
+  (let [device-id (or (nth args 2 nil) (die "usage: kagi device revoke <device-id>"))
+        data (or (persist/load* vault-path) (die "no vault — run: kagi init"))
+        meta (device/revoke-device (:meta data) device-id)
+        st (load-store (dissoc data :meta))]
+    (save-store! st meta)
+    (println (pr-str {:ok? true :revoked device-id
+                      :unlock (unlock/status meta)
+                      :warning "これはアクセス一覧の変更であって、その端末が既に得た VMK を
+                                取り消すものではない。紛失端末は vault 侵害として扱い、
+                                secret 自体を rotate すること"}))))
+
 (defn- cmd-unlock-status []
   (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))]
     (println (pr-str (unlock/status (:meta data))))))
@@ -423,6 +511,14 @@ kagi — 自己主権・対量子(PQC) secrets vault (op 相当)
   kagi unlock-enable-keychain [--ref keychain://service/account]
                             VMK unlock を OS keychain に追加(passphrase は recovery として残す)
   kagi unlock-status        VMK unlock methods を metadata のみ表示
+  kagi device request --label NAME [--out F]
+                            [新端末] hybrid 鍵を生成し request + fingerprint を出す
+  kagi device grant <request.edn> --fingerprint FP [--ttl 900] [--out F]
+                            [登録済端末] VMK を相手の公開鍵に封入。fingerprint 必須
+  kagi device accept <grant.edn>
+                            [新端末] VMK を復元し、自端末の keychain wrap を追加
+  kagi device ls            登録済み端末を表示(鍵素材は出ない)
+  kagi device revoke <id>   その端末の wrap を外す(既得の VMK は取り消せない)
   kagi unlock-enable-passkey
                             one-shot loopback bridgeでWebAuthn PRF unlockを追加
   kagi recovery create --out DIR [--threshold 3] [--shares 5]
@@ -461,6 +557,13 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
         "identity-migrate" (cmd-identity-migrate p id args)
         "unlock-enable-keychain" (cmd-unlock-enable-keychain p id args)
         "unlock-status" (cmd-unlock-status)
+        "device" (case (second args)
+                   "request" (cmd-device-request p args)
+                   "grant"   (cmd-device-grant p args)
+                   "accept"  (cmd-device-accept p args)
+                   "ls"      (cmd-device-ls p)
+                   "revoke"  (cmd-device-revoke p args)
+                   (die "usage: kagi device request|grant|accept|ls|revoke ..."))
         "unlock-enable-passkey" (cmd-unlock-enable-passkey p)
         "recovery" (case (second args)
                      "create" (cmd-recovery-create p args)
