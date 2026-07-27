@@ -14,6 +14,10 @@
    :item/cid         {}                       ; SealedBlockStore content id
    :item/nonce       {}                       ; AES-GCM nonce(base64)
    :item/version     {}
+   :item/key-epoch   {}
+   :item/key-created-at {}
+   :item/vmk-epoch {}
+   :item/rotation-event {}
    :item/wrap        {}                       ; {:nonce :wrapped} owner DEK wrap
    :item/created-by  {}
 
@@ -24,11 +28,14 @@
    :grant/cap        {}                       ; :viewer | :member
    :grant/expiry     {}
    :grant/revoked    {}
+   :grant/key-epoch  {}
 
    :member/did       {:db/unique :db.unique/identity}
    :member/role      {}                       ; :owner | :member | :viewer
    :member/kem-pub   {}                       ; hybrid KEM 公開鍵(base64)
    :member/sign-pub  {}                       ; Ed25519+ML-DSA 公開鍵(base64)
+   :member/sign-key  {}                       ; key lifecycle metadata
+   :member/kem-key   {}                       ; key lifecycle metadata
 
    :ledger/seq       {:db/unique :db.unique/identity}
    :ledger/prev-hash {}                       ; ハッシュ鎖

@@ -6,7 +6,8 @@
     - hash    = SHA-256(prev-hash ‖ canonical(fact))   ← 1 link でも壊すと以降全滅
     - sig     = hybrid-sign(hash)                       ← {:ed b64 :mldsa b64}（任意）
   canonical 化は sorted-map + pr-str で決定的にする(再計算と byte 一致させるため)。"
-  (:require [kagi.crypto :as crypto])
+  (:require [kagi.crypto :as crypto]
+            [kagi.key-registry :as key-registry])
   (:import [java.util Base64]))
 
 (defn- b64 ^String [^bytes b] (.encodeToString (Base64/getEncoder) b))
@@ -26,18 +27,21 @@
 (defn make-entry
   "現 ledger に fact を継ぐ entry を作る。signer({:ed :mldsa} 秘密 bundle, provider 越し)が
   あれば hash に hybrid 署名する。"
-  [ledger fact provider signer]
-  (let [prev      (last ledger)
+  ([ledger fact provider signer]
+   (make-entry ledger fact provider signer nil))
+  ([ledger fact provider signer {:keys [key now]}]
+   (when key (key-registry/authorize! key :sign now))
+   (let [prev      (last ledger)
         prev-h-b64 (:ledger/hash prev)
         prev-h    (when prev-h-b64 (unb64 prev-h-b64))
         h         (link-hash prev-h fact)
         sig       (when signer
-                    (let [{:keys [ed mldsa]} (crypto/sign* provider signer h)]
+                    (let [{:keys [ed mldsa]} (crypto/sign-with provider signer h)]
                       {:ed (b64 ed) :mldsa (b64 mldsa)}))]
     (cond-> (assoc fact :ledger/seq (count ledger)
                    :ledger/prev-hash prev-h-b64
                    :ledger/hash (b64 h))
-      sig (assoc :ledger/sig sig))))
+      sig (assoc :ledger/sig sig)))))
 
 (defn verify-chain
   "ledger 全体を検証 → {:ok? :broken-at}。各 entry で (1)hash 再計算一致 (2)prev-hash 連結
