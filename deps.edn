@@ -5,12 +5,14 @@
  ;; JCA; Ed25519 + AES-256-GCM come from the JDK. CLJS/WASM uses the kotoba-crypto
  ;; Rust provider instead (see src/kagi/crypto.cljc :: Provider seam).
  :deps {io.github.kotoba-lang/langgraph
-        {:local/root "../langgraph"}
+        {:git/url "https://github.com/kotoba-lang/langgraph.git"
+         :git/sha "577a59a9d5eb3ef90b81342f4673973f481ff7f4"}
         org.clojure/data.json {:mvn/version "2.5.0"}
         ;; 1Password 互換 keychain データモデル + 1PUX import(crypto/store 非依存、
         ;; ADR-2607023000)。kagi は kagitaba item を pr-str して DEK 封緘パイプラインに通す。
         io.github.kotoba-lang/kagitaba
-        {:local/root "../kagitaba"}
+        {:git/url "https://github.com/kotoba-lang/kagitaba.git"
+         :git/sha "d4ad1d7b4c73b312618e6ced3f58ce5860381764"}
         ;; Shared fail-closed ABAC/control semantics. kagi owns only the
         ;; vault-specific attribute adapter and enforcement point.
         io.github.kotoba-lang/security
