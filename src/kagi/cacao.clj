@@ -6,7 +6,8 @@
 
   SIWE/wire ビルダは `kotoba.cacao` の byte-exact 純関数の写し(同期して保つ)。crypto は
   JDK Ed25519 + 最小 CBOR(definite-length)。"
-  (:require [clojure.string :as str]
+  (:require [cacao.core :as shared]
+            [clojure.string :as str]
             [ed25519.core :as ed25519])
   (:import [java.security Signature MessageDigest]
            [java.io ByteArrayOutputStream]
@@ -176,6 +177,20 @@
 (defn- ed-verify? [pub ^bytes msg ^bytes sig]
   (let [v (doto (Signature/getInstance "Ed25519") (.initVerify pub))] (.update v msg) (.verify v sig)))
 
+(defn- seed-bytes
+  "The raw 32-byte Ed25519 seed, from either representation callers hold.
+
+  This repo's identities carry a JCA `PrivateKey` (from `KeyPairGenerator`),
+  whose PKCS#8 encoding ends with the seed; the shared CACAO library derives
+  the issuer DID from the seed itself, so it needs the raw bytes. Anything
+  already 32 bytes is passed through."
+  ^bytes [priv]
+  (cond
+    (bytes? priv) (if (= 32 (alength ^bytes priv))
+                    priv
+                    (byte-array (take-last 32 (seq priv))))
+    :else (byte-array (take-last 32 (seq (.getEncoded ^java.security.PrivateKey priv))))))
+
 ;; ───────── mint / verify ─────────
 
 (defn mint
@@ -189,16 +204,19 @@
         sig-b64 (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) sig)]
     (.encodeToString (Base64/getEncoder) (cbor-bytes (->wire payload sig-b64)))))
 
-;; ── kotobase.net-specific CACAO (byte-exact to the proven-live cloud-murakumo
-;; queue_kotoba minter) ──────────────────────────────────────────────────────
-;; The LIVE kotobase.net edge is the kotobase-cf-wasm worker, whose
-;; required-capability does an EXACT hardcoded match on the single resource
-;; "kotoba://can/kotobase:pin" — NOT the op/graph-parameterized scheme — and it
-;; wants domain "kotobase.net", aud "did:web:kotobase.net", and NO "h" wire
-;; field. `.q` reads and `.transact`/`.fold` writes both gate on this.
+;; ── kotobase.net apex CACAO ─────────────────────────────────────────────────
+;; The rules live in `cacao.core` (org-chainagnostic-cacao), NOT here. The
+;; comment that used to sit at this spot described the pre-cutover pod and
+;; asserted the apex wanted "NO h wire field" and a single resource; both were
+;; false of the apex and kept `push`/`pull` returning 401 for months. Re-adding
+;; a local description of the apex's rules is how that happens again — read
+;; `cacao.core/mint-kotobase-apex`, which is tested against them.
 
-(def kotobase-pin-resource "kotoba://can/kotobase:pin")
-(def kotobase-operator-did "did:web:kotobase.net")
+(def kotobase-pin-resource
+  "Re-exported for callers in this repo; the value is the shared library's."
+  shared/kotobase-pin-capability)
+
+(def kotobase-operator-did shared/kotobase-apex-aud)
 
 (defn- ->kotobase-wire
   "The wire envelope the LIVE apex accepts.
@@ -220,41 +238,42 @@
 (defn graph-scope
   "The `kotoba://graph/<issuer-did>` scope the apex requires.
 
-  NOT a graph CID. The apex checks that the CACAO's graph scope EQUALS the
-  ISSUER DID and rejects a CID-shaped scope with \"CACAO graph scope does not
-  include issuer DID\". The request body still names the canonical graph CID;
-  only the CACAO scope is the DID."
+  Delegates to the shared library. Kept as a name here because callers and
+  tests in this repo refer to it."
   [did]
-  (str "kotoba://graph/" did))
+  (last (shared/kotobase-apex-resources did)))
 
 (defn mint-kotobase
-  "Mint a CACAO the live kotobase.net apex accepts. id = {:private-key :did};
-  opts {:aud :nonce :issued-at :expiry}. aud defaults to did:web:kotobase.net.
+  "Mint a CACAO the live kotobase.net apex accepts.
 
-  TWO resources are required, and shipping only the first is why `kagi push`
-  answered 401 against the live apex:
+  This used to be ~15 lines of local payload/wire/CBOR assembly, and all of
+  it was wrong in three different ways at once — no graph scope, no `h`
+  header, and an `iat` carrying nanoseconds that the apex's
+  `parse-utc-seconds` cannot parse. Each produced the same opaque 401, so
+  `push`/`pull` were dead and looked like a network problem
+  (ADR-2607275000).
 
-    kotoba://can/kotobase:pin     the capability
-    kotoba://graph/<issuer-did>   the scope, equal to the issuer DID
+  It is now a call into `cacao.core/mint-kotobase-apex`, which owns those
+  rules for every consumer and THROWS on a violation rather than handing back
+  a token the apex will silently refuse. ADR-2607268000 is the standing rule
+  that made this the fix rather than another patch to the copy.
 
-  This file is a LOCAL COPY of a CACAO implementation that
-  `kotoba-lang/org-chainagnostic-cacao` owns, and it drifted from it exactly
-  as ADR-2607268000 said copies do — that ADR was written because ~25 repos
-  carried this file with a \"keep in sync\" comment and diverged anyway. The
-  graph scope is restored here to unblock sync; the copy itself is the bug
-  and is being removed in favour of the shared library."
+  `id` is `{:private-key :did}`; `:private-key` may be the raw 32-byte seed or
+  a JCA PrivateKey, since callers in this repo hold both."
   [{:keys [private-key did]} {:keys [aud nonce issued-at expiry op-caps]
                               :or {op-caps ["datom:read" "datom:transact" "tx:create"]}}]
-  (let [payload {:iss did :aud (or aud kotobase-operator-did)
-                 :nonce nonce :issued-at issued-at :expiry expiry
-                 :domain "kotobase.net" :version "1"
-                 :resources (into [kotobase-pin-resource]
-                                  (conj (mapv #(str "kotoba://can/" %) op-caps)
-                                        (graph-scope did)))}
-        msg     (siwe-message payload)
-        sig     (ed-sign private-key (.getBytes ^String msg "UTF-8"))
-        sig-b64 (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) sig)]
-    (.encodeToString (Base64/getEncoder) (cbor-bytes (->kotobase-wire payload sig-b64)))))
+  (let [seed (seed-bytes private-key)
+        {:keys [cacao-b64 iss]} (shared/mint-kotobase-apex
+                                 {:seed seed :aud aud :nonce nonce
+                                  :iat issued-at :exp expiry :op-caps op-caps})]
+    (when (and did (not= did iss))
+      ;; The issuer is DERIVED from the seed by the shared library, never
+      ;; passed in. If the caller's own :did disagrees, something is holding
+      ;; the wrong key and a silent mismatch would surface as an unrelated
+      ;; authorization failure much later.
+      (throw (ex-info "cacao: identity :did does not match the seed's derived did:key"
+                      {:cacao/rule :issuer-binding :expected did :derived iss})))
+    cacao-b64))
 
 (defn decode-wire
   "Decode a minted CACAO into its three wire parts, WITHOUT verifying.

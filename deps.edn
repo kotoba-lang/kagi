@@ -25,7 +25,16 @@
         io.github.kotoba-lang/org-ietf-ed25519
         {:sha "fdcefb9f1b83461fee54d04b63e374fa301ee847"}
         io.github.kotoba-lang/tech-ipfs-specs-ipns
-        {:sha "f2563eb1cb010c96f6dec1dfbd468fac93367498"}}
+        {:sha "f2563eb1cb010c96f6dec1dfbd468fac93367498"}
+        ;; The CACAO mint/verify this repo used to carry its own copy of.
+        ;; ADR-2607268000: ~25 repos held that copy with a "keep in sync"
+        ;; comment and diverged anyway; kagi's drifted far enough that
+        ;; push/pull were dead against the live apex. The apex-shape rules now
+        ;; live in `cacao.core/mint-kotobase-apex`, which THROWS on a
+        ;; violation instead of returning a token the apex silently refuses.
+        io.github.kotoba-lang/org-chainagnostic-cacao
+        {:git/url "https://github.com/kotoba-lang/org-chainagnostic-cacao.git"
+         :git/sha "9e65581af2e7d9869ceac13d2e1c508def4f9e45"}}
  :aliases
  {;; offline workspace dev — pin transitive langchain-clj to local checkout
   :dev {:override-deps
