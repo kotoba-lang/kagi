@@ -107,8 +107,12 @@ clojure -M:test -n kagi.crypto.noble-reverse-test  # 逆方向（ブラウザ→
   「content-addressed」と書いていたが、実際に届く id は `kagi.operation` が作る
   **パス**であって、バイト列を検証できるハッシュではない。検証できないものを
   検証していると謳わない代わりに、上書き拒否で「1 キー = 1 版」を守る。
-- **IPFS は未実装。** immutable かつ本当に content-addressed な IPFS は「キーを
-  上書きしない」の前提が別物なので、S3 系と同じアダプタには載らない。
+- **IPFS は別のアダプタ**(`store/ipfs-sealed-block-store`)。同じものには載らない ——
+  object store は「呼び出し側が名前を決める」面、IPFS は「内容がアドレスを決める」面で、
+  kagi が渡す `cid` はパスなので IPFS に渡す先が無い。したがって IPFS 版は
+  **name→CID の可変ポインタ層を注入させる**(隠すと、ポインタをどこに永続化するかという
+  本質的な問いが消える)。引き換えに、同一バイト列が同じ CID になるのでリトライの冪等性を
+  GET せずに判定でき、`:verify-fn` を渡せば取得したバイト列を検証できる。
 
 検証はネットワークに出ずに行う: `kagi.storj-block-store-test` が
 `storj.protocols/IHttp` に S3 を演じる偽 transport を差し、署名・URL 組み立て・
@@ -248,6 +252,7 @@ clojure -M:dev:cli <cmd>  # CLI（bin/kagi と同じ）
 > 台帳改竄検知・CACAO 詐称/改竄 reject・authn 強制)。ブラウザ provider は
 > `kagi.crypto.noble`(純 JS `@noble/*`、Rust ではない)、`KotobaStore` は注入式
 > `SealedBlockStore` と暗号文E2E contract testを持つ。CLIの既定は local snapshot、
-> cloud CLIは暗号化snapshot同期。S3 object store(Storj / B2)への着地は
-> `kagi.store/object-sealed-block-store` で実装済み、IPFS は未実装。
+> cloud CLIは暗号化snapshot同期。S3 object store(Storj / B2)は
+> `kagi.store/object-sealed-block-store`、IPFS は `kagi.store/ipfs-sealed-block-store`
+> (ポインタ層の注入が必須)。
 > 秘密鍵は `.kagi/identity.edn`（gitignore）。git に絶対コミットしない。

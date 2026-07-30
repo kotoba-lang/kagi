@@ -119,6 +119,69 @@
                                        (fn? put-object) (conj :put-object))})))
    (->ObjectSealedBlockStore get-object put-object exists? (boolean allow-overwrite?))))
 
+;; ───────── IPFS 上の SealedBlockStore ─────────
+;;
+;; **同じアダプタには載らない。** object store は「呼び出し側が名前を決めて、その名前に
+;; バイト列を置く」面だが、IPFS は逆で「バイト列を渡すと、内容から決まるアドレスが
+;; 返る」面。kagi が渡す `cid` は `cid:<item-id>:v<n>` という**パス**なので、IPFS に
+;; そのまま渡す先が無い。
+;;
+;; したがって IPFS 版は **name → CID の可変ポインタ層**を必ず伴う。それを隠して
+;; 「IPFS に置ける」と言うと、ポインタをどこに永続化するかという本質的な問いが
+;; 消えてしまう —— ここでは注入させて、呼び出し側に決めさせる(kagi なら Datomic graph、
+;; 他のホストなら KV でも構わない)。
+;;
+;; 引き換えに、object store 版には無い性質が 2 つ手に入る:
+;;   1. **同一バイト列は必ず同じ CID になる**ので、リトライの冪等性を GET して
+;;      比較せずに判定できる(object store 版は HEAD + GET が要った)。
+;;   2. **本物の content addressing** なので、取ってきたバイト列を検証できる
+;;      (`:verify-fn` を渡した場合のみ。渡さなければ gateway を信用することになる)。
+
+(defrecord IpfsSealedBlockStore [add-bytes cat-bytes get-pointer put-pointer! verify-fn]
+  SealedBlockStore
+  (sealed-get [_ cid]
+    (when-let [content-cid (get-pointer cid)]
+      (let [bytes (cat-bytes content-cid)]
+        (when (and verify-fn bytes (not (verify-fn content-cid bytes)))
+          (throw (ex-info "fetched bytes do not match the content address"
+                          {:key cid :content-cid content-cid})))
+        bytes)))
+  (sealed-put! [s cid bytes]
+    (let [content-cid (add-bytes bytes)
+          existing (get-pointer cid)]
+      ;; 既存ポインタが**別の** CID を指しているなら拒む。同じ CID なら、それは
+      ;; 同一バイト列の再投入(部分失敗からのリトライ)なので通す —— content
+      ;; addressing のおかげで、バイト列を取り直して比べる必要が無い。
+      (when (and existing (not= existing content-cid))
+        (throw (ex-info "sealed block key already points at different content"
+                        {:key cid :existing existing :incoming content-cid})))
+      (when-not existing
+        (put-pointer! cid content-cid))
+      s)))
+
+(defn ipfs-sealed-block-store
+  "IPFS の上に `SealedBlockStore` を張る。**ポインタ層が必須。**
+
+  引数:
+    `:add-bytes`   `[bytes] -> content-cid`（`kotoba.lang.ipfs/pin-blob` の `:cid`）
+    `:cat-bytes`   `[content-cid] -> bytes`（`fetch-blob`）
+    `:get-pointer` `[key] -> content-cid | nil`
+    `:put-pointer!` `[key content-cid] -> any`
+    `:verify-fn`   任意。`[content-cid bytes] -> boolean`。**渡さないと gateway を
+                   信用することになる**(暗号文は AEAD で封緘されているので改竄は
+                   復号時に落ちるが、原因が遠くなる)。"
+  [{:keys [add-bytes cat-bytes get-pointer put-pointer! verify-fn]}]
+  (let [missing (cond-> #{}
+                  (not (fn? add-bytes)) (conj :add-bytes)
+                  (not (fn? cat-bytes)) (conj :cat-bytes)
+                  (not (fn? get-pointer)) (conj :get-pointer)
+                  (not (fn? put-pointer!)) (conj :put-pointer!))]
+    (when (seq missing)
+      (throw (ex-info "ipfs-sealed-block-store is missing required functions"
+                      {:missing missing
+                       :note "IPFS はアドレスを返す面なので、name→CID のポインタ層が要る"}))))
+  (->IpfsSealedBlockStore add-bytes cat-bytes get-pointer put-pointer! verify-fn))
+
 ;; ───────── MemStore(依存ゼロ、.cljc 可搬) ─────────
 
 (defrecord MemStore [a]
