@@ -16,6 +16,9 @@
                                     # --record は item id 等の非機微参照だけを EDN に記録
                                     #   (ls による総当たり列挙を避けて狙い撃ちで引くため)
     kagi get <name>                 # secret を復号して stdout に出す
+    kagi fill <name> --purpose <p> --selector <css> --cdp <ws>
+                                    # ブラウザの入力欄へ直接注入(clipboard 不使用、
+                                    # 値は argv にも JS 式にも載らない)
     kagi ls                         # item 一覧(復号しない)
     kagi rotate <name>              # DEK を回転(再封緘)
     kagi log                        # 監査台帳(hybrid 署名 + ハッシュ鎖)を検証して表示
@@ -34,6 +37,7 @@
             [kagi.device :as device]
             [kagi.secret-store :as secret-store]
             [kagi.clipboard :as clipboard]
+            [kagi.autofill :as autofill]
             [kagi.unlock :as unlock]
             [kagi.recovery :as recovery]
             [kagi.recovery-io :as recovery-io]
@@ -318,6 +322,46 @@
                                               [:cleared? :clear-mechanism
                                                :ttl-ms])))))
             (die "reveal denied:" (get-in r [:result :effect]))))))))
+
+(defn- cmd-fill [p id args]
+  (let [name (first (positional args))
+        purpose (or (not-empty (arg-val args "--purpose"))
+                    (die "usage: kagi fill <name> --purpose <purpose> --selector <css> [--cdp <ws-url>] [--page <url-substring>]"))
+        selector (or (not-empty (arg-val args "--selector"))
+                     (die "--selector is required — a fill aimed at the wrong field is a password typed somewhere it does not belong"))
+        cdp (or (not-empty (arg-val args "--cdp"))
+                (die "--cdp <ws-url> is required (get it with: agent-browser get cdp-url)"))
+        page-match (arg-val args "--page")]
+    (when-not name (die "usage: kagi fill <name> --purpose <purpose> --selector <css> --cdp <ws-url>"))
+    (with-vault p
+      (fn [st vmk]
+        (when-not (store/item st name) (die "no such item:" name))
+        (let [r (run-op! p id st vmk {:op :item/reveal :item-id name} purpose)
+              pt (get-in r [:result :plaintext])]
+          (if-not pt
+            (die "reveal denied:" (get-in r [:result :effect]))
+            (let [base (autofill/debug-base cdp)
+                  targets (autofill/page-targets base)
+                  page (or (autofill/pick-page targets page-match)
+                           (die (str "no debuggable page"
+                                     (when page-match (str " matching " page-match)))))
+                  out (autofill/fill-secret!
+                       {:page-ws (:webSocketDebuggerUrl page)
+                        :selector selector
+                        :secret (String. ^bytes pt "UTF-8")})]
+              ;; Lengths, never the value: enough to tell a landed write from
+              ;; a truncated one, not enough to disclose a character of it.
+              (println (pr-str (assoc (select-keys out [:ok? :verdict :expected-length
+                                                        :observed-length])
+                                      :item name
+                                      :purpose purpose
+                                      :selector selector
+                                      :page (:url page)
+                                      :approval :human-approved
+                                      :secret? false)))
+              ;; Nonzero on anything but :match, so a caller can gate on it
+              ;; rather than reading the verdict by eye.
+              (when-not (:ok? out) (System/exit 1)))))))))
 
 (defn- cmd-ls []
   (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))]
@@ -645,6 +689,7 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
         "add"    (cmd-add p id args)
         "get"    (cmd-get p id args)
         "copy"   (cmd-copy p id args)
+        "fill"   (cmd-fill p id args)
         "ls"     (cmd-ls)
         "import" (case (second args)
                    "onepassword" (cmd-import-onepassword p id (rest args))

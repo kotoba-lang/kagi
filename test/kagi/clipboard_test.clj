@@ -2,25 +2,46 @@
   (:require [clojure.test :refer [deftest is testing]]
             [kagi.clipboard :as clipboard]))
 
-;; TTL は 20ms ではなく 500ms。20ms だと「copy した直後にまだ残っている」を確かめる
-;; アサーションの予算が 20ms しかなく、負荷のかかったマシン(このワークスペースは
-;; 並行セッションが常時走る)では TTL クリアが先に発火して paste が "" を返す。
-;; 実測: フル実行で断続的に落ち、単独実行では 3/3 通る。テストが見たい性質
-;; 「TTL 前は残る / TTL 後は消える」は据え置きで、窓だけ広げる。
+;; Two sessions found this flake independently on 2026-07-30 and fixed it two
+;; ways. The other widened the window to 500ms/800ms; this splits the test so
+;; there is no window to lose. Both are kept where each is the right tool:
+;; `ttl-ms`/`past-ttl-ms` below still serve the one assertion that must wait for
+;; a non-event (a value NOT being cleared), which polling cannot express.
+;;
+;; The original was a single test asserting in OPPOSITE directions against one
+;; 20ms timer — "the value is still there" right after the call, and "the value
+;; is gone" after a fixed sleep. Either could lose; it failed about one run in
+;; three. A wider budget lowers the odds, but this workspace runs many
+;; concurrent sessions (the other session's own note says so), so the race
+;; survives it. Presence and clearing are therefore separate tests: presence
+;; uses a TTL long enough that the clear cannot interfere, and clearing is
+;; awaited by polling rather than by guessing how slow the machine is.
 (def ^:private ttl-ms 500)
 (def ^:private past-ttl-ms 800)
 
+(defn- wait-until
+  "Poll `pred` up to `ms`. Returns true if it became true."
+  [ms pred]
+  (let [deadline (+ (System/currentTimeMillis) ms)]
+    (loop []
+      (cond (pred) true
+            (> (System/currentTimeMillis) deadline) false
+            :else (do (Thread/sleep 5) (recur))))))
+
+(deftest a-copy-returns-metadata-only-and-leaves-the-value-in-place
+  (let [cb (clipboard/memory-clipboard)
+        r (clipboard/copy-secret-with-ttl! cb "secret-value" {:ttl-ms 60000})]
+    (is (true? (:ok? r)))
+    (is (true? (:copied? r)))
+    (is (= 60000 (:ttl-ms r)))
+    (is (false? (:secret? r)))
+    (is (= "secret-value" (clipboard/paste cb)))))
+
 (deftest clipboard-ttl-clears-unchanged-secret
-  (testing "secret copy returns metadata only and clears unchanged clipboard"
-    (let [cb (clipboard/memory-clipboard)
-          r (clipboard/copy-secret-with-ttl! cb "secret-value" {:ttl-ms ttl-ms})]
-      (is (true? (:ok? r)))
-      (is (true? (:copied? r)))
-      (is (= ttl-ms (:ttl-ms r)))
-      (is (false? (:secret? r)))
-      (is (= "secret-value" (clipboard/paste cb)))
-      (Thread/sleep past-ttl-ms)
-      (is (= "" (clipboard/paste cb))))))
+  (let [cb (clipboard/memory-clipboard)]
+    (clipboard/copy-secret-with-ttl! cb "secret-value" {:ttl-ms 20})
+    (is (wait-until 3000 #(= "" (clipboard/paste cb)))
+        "the scheduled clear must fire")))
 
 (deftest clipboard-ttl-does-not-clear-user-replacement
   (testing "TTL clear does not erase a later clipboard value"
@@ -67,8 +88,13 @@
   (testing "the honest report for a caller that did not wait — the clear now
             also happens when this process ends, which may be sooner than the
             TTL and is never later"
+    ;; A long TTL on purpose. Written first with :ttl-ms 20, this raced its own
+    ;; background clear: the assertion below asserts the value is STILL there,
+    ;; and on a slow pass the 20ms timer won. It failed roughly one run in two.
+    ;; A test that asserts "not yet cleared" must not be timed against a clock
+    ;; it does not control.
     (let [cb (clipboard/memory-clipboard)
-          r (clipboard/copy-secret-with-ttl! cb "secret-value" {:ttl-ms 20})]
+          r (clipboard/copy-secret-with-ttl! cb "secret-value" {:ttl-ms 60000})]
       (is (false? (:cleared? r)))
       (is (= :on-exit (:clear-mechanism r)))
       (is (= "secret-value" (clipboard/paste cb))))))
