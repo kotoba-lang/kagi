@@ -10,7 +10,9 @@
 
   使い方:
     kagi init                       # 鍵生成 + vault 作成(passphrase 設定)
-    kagi add <name> [-c comp]       # secret を stdin/プロンプトから登録
+    kagi add <name> [-c comp] [--category login]
+                                    # secret を stdin/プロンプトから登録
+                                    # --category は kagitaba の正準 keyword で検証する
     kagi get <name>                 # secret を復号して stdout に出す
     kagi ls                         # item 一覧(復号しない)
     kagi rotate <name>              # DEK を回転(再封緘)
@@ -35,7 +37,8 @@
             [kagi.passkey :as passkey]
             [kagi.passkey-bridge :as passkey-bridge]
             [kagi.sync :as sync]
-            [kagi.import.onepassword :as import-1p])
+            [kagi.import.onepassword :as import-1p]
+            [kagitaba.category :as kcat])
   (:import [java.time Instant]
            [java.awt Desktop Desktop$Action]
            [java.net URI]
@@ -195,15 +198,31 @@
 
 (defn- cmd-add [p id args]
   (let [name (first (positional args))
-        comp (or (arg-val args "-c") "personal")]
-    (when-not name (die "usage: kagi add <name> [-c compartment]"))
+        comp (or (arg-val args "-c") "personal")
+        ;; `:item/category` is a non-sensitive plaintext index (vault.cljc) and
+        ;; `:item/create` has always accepted it — `import onepassword` sets it
+        ;; from the 1PUX category. Only `add` had no way to pass one, so every
+        ;; item created by hand was uncategorised and `ls` showed a blank
+        ;; column. An account stored as an untyped blob is not managed; it is
+        ;; just a string somebody has to remember the shape of.
+        cat (some-> (arg-val args "--category") keyword)]
+    (when-not name (die "usage: kagi add <name> [-c compartment] [--category kind]"))
+    ;; Validated against kagitaba's taxonomy rather than accepted freely: a
+    ;; typo'd `--category logon` would file the item under a category nothing
+    ;; else uses, and the index is only worth having if it is shared.
+    (when (and cat (not (kcat/known? cat)))
+      (die (str "unknown category: " cat
+                " — kagitaba knows " (pr-str (sort (map name kcat/known-keys))))))
     (with-vault p
       (fn [st vmk]
         (let [secret (str/trim (slurp *in*))]
           (when (str/blank? secret) (die "empty secret on stdin"))
-          (run-op! p id st vmk {:op :item/create :item-id name :compartment comp
-                                :plaintext (.getBytes secret "UTF-8")} :cli-add)
-          (println "stored" name "in" comp))))))
+          (run-op! p id st vmk (cond-> {:op :item/create :item-id name
+                                        :compartment comp
+                                        :plaintext (.getBytes secret "UTF-8")}
+                                 cat (assoc :category cat))
+                   :cli-add)
+          (println "stored" name "in" comp (if cat (str "as " cat) "")))))))
 
 (defn- cmd-get [p id args]
   (let [name (first (positional args))]
@@ -541,8 +560,29 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
           (some #{"-h" "--help"} args))
     (help)
     (let [p  (crypto/jvm-provider)
-          id (identity/load-or-create-identity! id-path p (identity-options))]
-      (case (first args)
+          cmd (first args)
+          ;; `identity-migrate` must be able to READ the very plaintext
+          ;; identity it exists to move into a SecretStore.
+          ;;
+          ;; Without this the vault is unusable and unfixable. The identity is
+          ;; loaded here, before dispatch, so a plaintext identity throws
+          ;; "plaintext identity requires migration — run kagi
+          ;; identity-migrate before other commands"; but identity-migrate is
+          ;; itself dispatched after the load, so it throws the same error.
+          ;; The remediation the message prescribes cannot be executed. Found
+          ;; on a real vault (2026-07-30) whose identity.edn held private-b64,
+          ;; mldsa-private-b64 and kem-secret in world-readable plaintext:
+          ;; every command, migration included, exited non-zero.
+          ;;
+          ;; Scoped to this one command on purpose. Every other command still
+          ;; refuses a plaintext identity, so the guard keeps its meaning —
+          ;; the exception is exactly the operation that removes the condition
+          ;; being guarded against.
+          id (identity/load-or-create-identity!
+              id-path p
+              (cond-> (identity-options)
+                (= "identity-migrate" cmd) (assoc :allow-existing-plaintext? true)))]
+      (case cmd
         "init"   (cmd-init p id)
         "add"    (cmd-add p id args)
         "get"    (cmd-get p id args)
