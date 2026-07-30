@@ -193,7 +193,7 @@ ADRをcloseするとは開発停止ではなく、architecture decisionがコー
 
 - 独立第三者による暗号・application security監査。
 - 実browser / platform / roaming authenticator互換性マトリクス。
-- IPFS SealedBlockStore adapter、item-level sync conflict merge。
-  (B2/Storj 等の S3 object store は `kagi.store/object-sealed-block-store` で実装済み。)
+- item-level sync conflict merge。
+  (object store は `object-sealed-block-store`、IPFS は `ipfs-sealed-block-store` で実装済み。)
 - Android Keystore / Windows Credential Manager / Linux Secret Service。
 - memory zeroization、autofill/phishing defense、GUI device grant/revoke。
