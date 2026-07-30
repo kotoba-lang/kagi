@@ -36,8 +36,16 @@
   (append-chained-ledger! [s build-fn]))
 
 (defprotocol SealedBlockStore
-  "Ciphertext-only content-addressed block boundary. Implementations may use
-  B2/IPFS/Kotoba, but must never receive plaintext or raw VMKs."
+  "Ciphertext-only block boundary. Implementations may use B2/Storj/IPFS/Kotoba,
+  but must never receive plaintext or raw VMKs.
+
+  **`cid` is a key, not a content hash.** This docstring used to say
+  \"content-addressed\", but the ids that actually arrive are minted by
+  `kagi.operation` as `\"cid:<item-id>:v<version>\"` — a path. Nothing here can
+  verify bytes against such an id, and an implementation that claims to is
+  lying. What the naming *does* give is that each version gets its own key, so
+  a key is written once and never legitimately rewritten with different bytes
+  — which is what `object-sealed-block-store` enforces instead."
   (sealed-get [s cid])
   (sealed-put! [s cid bytes]))
 
@@ -47,6 +55,69 @@
   (sealed-put! [s cid bytes] (swap! blocks assoc cid bytes) s))
 
 (defn memory-sealed-block-store [] (->MemorySealedBlockStore (atom {})))
+
+;; ───────── object store 上の SealedBlockStore(B2 / Storj / 任意の S3) ─────────
+
+(defn- bytes=
+  "Byte 列の内容比較。`=` は JVM の `byte[]` では参照比較になるので使えない
+  (`org-signal` の CLJS 移植が同じ罠で毎メッセージ DH ratchet していた)。"
+  [a b]
+  (let [->seq (fn [x] (cond (nil? x) nil
+                            (sequential? x) (seq x)
+                            :else (seq #?(:clj (map #(bit-and % 0xff) x)
+                                          :cljs (array-seq x)))))]
+    (= (->seq a) (->seq b))))
+
+(defn- ->host-bytes
+  "四関数が返す「0-255 の vector」を、crypto provider が食える host のバイト列へ。
+
+  `storj.store` は両方向とも unsigned int の vector を契約にしている一方、
+  `kagi.crypto` の AEAD は JVM で `byte[]`、ブラウザで `Uint8Array` を取る。
+  変換を毎呼び出し側でやると、片方だけ忘れた経路が復号時まで気づかれない。"
+  [v]
+  (cond
+    (nil? v) nil
+    (sequential? v) #?(:clj (byte-array (map unchecked-byte v))
+                       :cljs (js/Uint8Array.from (into-array v)))
+    :else v))
+
+(defrecord ObjectSealedBlockStore [get-object put-object exists? allow-overwrite?]
+  SealedBlockStore
+  (sealed-get [_ cid] (->host-bytes (get-object cid)))
+  (sealed-put! [s cid bytes]
+    ;; 既存キーへの上書きを既定で拒む。cid は version 込みなので、同じキーに
+    ;; 違うバイト列が来るのは bug か攻撃であり、黙って上書きすると **まだ grant が
+    ;; 指している前の版の暗号文が消える**。同一バイト列の再 PUT(部分失敗からの
+    ;; リトライ)は通す — ここで弾くと正当なリトライが詰む。
+    (when-not allow-overwrite?
+      (when (and exists? (exists? cid))
+        (let [existing (->host-bytes (get-object cid))]
+          (when-not (bytes= existing bytes)
+            (throw (ex-info "sealed block key already holds different ciphertext"
+                            {:cid cid
+                             :existing-bytes (count (or existing []))
+                             :incoming-bytes (count (or bytes []))}))))))
+    (put-object cid bytes)
+    s))
+
+(defn object-sealed-block-store
+  "`{:get-object :put-object :exists?}` の上に `SealedBlockStore` を張る。
+
+  この 4 関数は `storj.store/store-fns` が返す形そのもの(Storj Gateway-MT でも、
+  同じ S3 面を出す Backblaze B2 でも、endpoint 違いで同じものが使える)。**kagi は
+  io-storj に依存しない** —— 依存を持つのは両方を配線するアプリケーション側で、
+  それは `storj.store` の ns docstring が明示している設計意図でもある。
+
+  opts:
+    `:allow-overwrite?` 既定 false。true にすると既存キーの検査を省く(HEAD が
+    1 往復減るが、前の版の暗号文を消しうる)。"
+  ([fns] (object-sealed-block-store fns {}))
+  ([{:keys [get-object put-object exists?]} {:keys [allow-overwrite?]}]
+   (when-not (and (fn? get-object) (fn? put-object))
+     (throw (ex-info "object-sealed-block-store needs :get-object and :put-object"
+                     {:got (cond-> #{} (fn? get-object) (conj :get-object)
+                                       (fn? put-object) (conj :put-object))})))
+   (->ObjectSealedBlockStore get-object put-object exists? (boolean allow-overwrite?))))
 
 ;; ───────── MemStore(依存ゼロ、.cljc 可搬) ─────────
 

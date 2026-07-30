@@ -57,7 +57,18 @@
   :witness {:main-opts ["-m" "kagi.witness-main"]}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
-                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                      ;; TEST-ONLY. kagi's own runtime does not depend on
+                      ;; io-storj: `store/object-sealed-block-store` takes the
+                      ;; four functions, not a Storj client, so whoever wires
+                      ;; the two depends on both (which is what storj.store's
+                      ;; own docstring says the arrangement should be). This is
+                      ;; here so the wiring is *proved* rather than described —
+                      ;; storj.store contracts bytes as 0-255 vectors while
+                      ;; kagi's AEAD wants byte[], and a fake-only test would
+                      ;; not catch that mismatch.
+                      io.github.kotoba-lang/io-storj
+                      {:git/sha "daa038ba72fd515452d0f4091298568755a39ec9"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
   ;; clojure -M:gen-vectors → JVM provider で cross-runtime 相互運用ベクタを再生成し

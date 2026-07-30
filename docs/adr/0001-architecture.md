@@ -53,7 +53,13 @@ CLI 実装は `$KAGI_HOME`（既定 `~/.kagi`）のローカル vaultを正と�
   できる。既存 identity は `kagi identity-migrate` で移行する。
 - KotobaStore は注入式 SealedBlockStore 境界を持ち、暗号化→blob/metadata分離→取得→復号を
   contract test で検証する。CLI の既定 backend は local `.kagi` snapshot、cloud CLIは
-  暗号化snapshot同期。B2/IPFS production adapterは未実装。
+  暗号化snapshot同期。**object store 実装は
+  `kagi.store/object-sealed-block-store` として実装済み**(2026-07-30) ——
+  `{:get-object :put-object :exists?}` の 4 関数を取るので、`storj.store/store-fns`
+  経由で Storj Gateway-MT と、同じ S3 面を出す **Backblaze B2** の両方に載る
+  (違いは endpoint だけ)。kagi 自身は io-storj に依存しない(4 関数を受け取るだけ)。
+  **IPFS は未実装** —— content-addressed で immutable な IPFS は「key を上書きしない」
+  という前提が別物なので、S3 系と同じアダプタには載らない。
 - Passkey PRF browser registration/authentication adapter、最小UI、browser→JVM bridge、
   VMK wrap/unlock APIと、Shamir recoveryのowner-only create/verify/get CLI ceremonyは実装済み。
   `kagi.recovery` はVMK用k-of-n分割・復元とset/integrity検証を行う。通常のCLI unlockは
@@ -187,6 +193,7 @@ ADRをcloseするとは開発停止ではなく、architecture decisionがコー
 
 - 独立第三者による暗号・application security監査。
 - 実browser / platform / roaming authenticator互換性マトリクス。
-- B2/IPFS production SealedBlockStore adapter、item-level sync conflict merge。
+- IPFS SealedBlockStore adapter、item-level sync conflict merge。
+  (B2/Storj 等の S3 object store は `kagi.store/object-sealed-block-store` で実装済み。)
 - Android Keystore / Windows Credential Manager / Linux Secret Service。
 - memory zeroization、autofill/phishing defense、GUI device grant/revoke。

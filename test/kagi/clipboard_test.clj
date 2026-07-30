@@ -2,24 +2,32 @@
   (:require [clojure.test :refer [deftest is testing]]
             [kagi.clipboard :as clipboard]))
 
+;; TTL は 20ms ではなく 500ms。20ms だと「copy した直後にまだ残っている」を確かめる
+;; アサーションの予算が 20ms しかなく、負荷のかかったマシン(このワークスペースは
+;; 並行セッションが常時走る)では TTL クリアが先に発火して paste が "" を返す。
+;; 実測: フル実行で断続的に落ち、単独実行では 3/3 通る。テストが見たい性質
+;; 「TTL 前は残る / TTL 後は消える」は据え置きで、窓だけ広げる。
+(def ^:private ttl-ms 500)
+(def ^:private past-ttl-ms 800)
+
 (deftest clipboard-ttl-clears-unchanged-secret
   (testing "secret copy returns metadata only and clears unchanged clipboard"
     (let [cb (clipboard/memory-clipboard)
-          r (clipboard/copy-secret-with-ttl! cb "secret-value" {:ttl-ms 20})]
+          r (clipboard/copy-secret-with-ttl! cb "secret-value" {:ttl-ms ttl-ms})]
       (is (true? (:ok? r)))
       (is (true? (:copied? r)))
-      (is (= 20 (:ttl-ms r)))
+      (is (= ttl-ms (:ttl-ms r)))
       (is (false? (:secret? r)))
       (is (= "secret-value" (clipboard/paste cb)))
-      (Thread/sleep 80)
+      (Thread/sleep past-ttl-ms)
       (is (= "" (clipboard/paste cb))))))
 
 (deftest clipboard-ttl-does-not-clear-user-replacement
   (testing "TTL clear does not erase a later clipboard value"
     (let [cb (clipboard/memory-clipboard)]
-      (clipboard/copy-secret-with-ttl! cb "secret-value" {:ttl-ms 20})
+      (clipboard/copy-secret-with-ttl! cb "secret-value" {:ttl-ms ttl-ms})
       (clipboard/copy! cb "replacement")
-      (Thread/sleep 80)
+      (Thread/sleep past-ttl-ms)
       (is (= "replacement" (clipboard/paste cb))))))
 
 (deftest no-secret-is-returned

@@ -72,6 +72,50 @@ clojure -M:test -n kagi.crypto.noble-reverse-test  # 逆方向（ブラウザ→
 相互運用は**両方向**を実ベクタで検証している。片方向だけだと、ブラウザが「自分だけが
 読める独自符号化」を書いていても気づけない。
 
+## 暗号文 blob を object store に着地させる（Storj / B2）
+
+`kagi.store/object-sealed-block-store` は `{:get-object :put-object :exists?}` の
+4 関数の上に `SealedBlockStore` を張る。この 4 関数は
+[`storj.store/store-fns`](https://github.com/kotoba-lang/io-storj) が返す形そのもの。
+
+```clojure
+(require '[kagi.store :as store] '[storj.core :as storj] '[storj.store :as storj-store]
+         '[sigv4.crypto :as sigv4-crypto])
+
+(def client (storj/client {:bucket "kagi-sealed-blocks"
+                           :access-key (System/getenv "STORJ_ACCESS_KEY")
+                           :secret-key (System/getenv "STORJ_SECRET_KEY")}
+                          {:crypto (sigv4-crypto/crypto) :http my-http}))
+
+(def blocks
+  (store/object-sealed-block-store
+    (storj-store/store-fns client {:now #(iso-now) :prefix "kagi/"})))
+
+(store/kotoba-store db-api conn blocks)
+```
+
+- **kagi は io-storj に依存しない。** 4 関数を受け取るだけなので、両方に依存するのは
+  配線するアプリケーション側 —— これは `storj.store` の ns docstring が明示している
+  設計意図でもある。テストだけが io-storj を引く。
+- **同じ経路が Backblaze B2 に載る。** B2 は S3 互換面を出すので、違うのは
+  `storj.gateway` に渡す endpoint だけ(`s3.us-west-004.backblazeb2.com`)。
+- **既存キーへの上書きは既定で拒む。** cid は `cid:<item-id>:v<version>` で version 込み
+  なので、同じキーに違うバイト列が来るのは bug か攻撃であり、黙って上書きすると
+  **まだ grant が指している前の版の暗号文が消える**。同一バイト列の再 PUT(部分失敗
+  からのリトライ)は通す。外すには `{:allow-overwrite? true}`。
+- **`cid` は content hash ではない。** `SealedBlockStore` の docstring は長く
+  「content-addressed」と書いていたが、実際に届く id は `kagi.operation` が作る
+  **パス**であって、バイト列を検証できるハッシュではない。検証できないものを
+  検証していると謳わない代わりに、上書き拒否で「1 キー = 1 版」を守る。
+- **IPFS は未実装。** immutable かつ本当に content-addressed な IPFS は「キーを
+  上書きしない」の前提が別物なので、S3 系と同じアダプタには載らない。
+
+検証はネットワークに出ずに行う: `kagi.storj-block-store-test` が
+`storj.protocols/IHttp` に S3 を演じる偽 transport を差し、署名・URL 組み立て・
+応答解釈は**本物の** `storj.core` にやらせる。アダプタだけを fake で試すと、
+io-storj が返す「0-255 の vector」と kagi の AEAD が食う `byte[]` の食い違いが
+復号時まで露見しない。
+
 ## 単一不変条件
 
 > AccessGovernor が拒否する 開示/書込/共有/鍵操作/認証 を kagi は決して行わない。
@@ -201,7 +245,9 @@ clojure -M:dev:cli <cmd>  # CLI（bin/kagi と同じ）
 > - **メンバー登録/共有**: `:authn` が depth-1 self-mint 登録、実 identity 同士の PQC 共有。
 >
 > 検証: **60 tests / 369 assertions + 3 browser tests pass**(KEM 往復・署名 tamper reject・PQC 共有・KDF・
-> 台帳改竄検知・CACAO 詐称/改竄 reject・authn 強制)。CLJS/WASM provider(kotoba-crypto Rust)と
-> `KotobaStore` は注入式 `SealedBlockStore` と暗号文E2E contract testを持つ。CLIの既定は
-> local snapshot、cloud CLIは暗号化snapshot同期であり、B2/IPFS production adapterは段階導入。
+> 台帳改竄検知・CACAO 詐称/改竄 reject・authn 強制)。ブラウザ provider は
+> `kagi.crypto.noble`(純 JS `@noble/*`、Rust ではない)、`KotobaStore` は注入式
+> `SealedBlockStore` と暗号文E2E contract testを持つ。CLIの既定は local snapshot、
+> cloud CLIは暗号化snapshot同期。S3 object store(Storj / B2)への着地は
+> `kagi.store/object-sealed-block-store` で実装済み、IPFS は未実装。
 > 秘密鍵は `.kagi/identity.edn`（gitignore）。git に絶対コミットしない。
