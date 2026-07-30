@@ -2,8 +2,13 @@
  ;; langgraph-clj brings langchain-clj transitively (both zero-/single-dep, all
  ;; .cljc → portable to JVM / SCI / ClojureScript / GraalVM). The PQC primitives
  ;; (ML-KEM-768 / ML-DSA-65 / SLH-DSA) are provided on the JVM by BouncyCastle via
- ;; JCA; Ed25519 + AES-256-GCM come from the JDK. CLJS/WASM uses the kotoba-crypto
- ;; Rust provider instead (see src/kagi/crypto.cljc :: Provider seam).
+ ;; JCA; Ed25519 + AES-256-GCM come from the JDK.
+ ;;
+ ;; The browser side is `src/kagi/crypto/noble.cljs` — pure-JS `@noble/*`, declared
+ ;; in package.json, NOT a Rust/WASM provider (this comment used to point at
+ ;; kotoba-crypto Rust; no such provider was ever wired, and repo-wide policy
+ ;; forbids adding new Rust). JVM consumers pulling this repo via :local/root or
+ ;; :git/sha never resolve those npm packages.
  :deps {io.github.kotoba-lang/langgraph
         {:git/url "https://github.com/kotoba-lang/langgraph.git"
          :git/sha "577a59a9d5eb3ef90b81342f4673973f481ff7f4"}
@@ -55,6 +60,10 @@
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
+  ;; clojure -M:gen-vectors → JVM provider で cross-runtime 相互運用ベクタを再生成し
+  ;; test/fixtures/jvm-crypto-vectors.edn へ書く(kagi.crypto.noble のテストが読む)。
+  :gen-vectors {:extra-paths ["test"]
+                :main-opts ["-m" "kagi.crypto.gen-interop-vectors"]}
   ;; static analysis — clj-kondo from deps (no binary), errors fail CI.
   :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2024.11.14"}}
          :main-opts    ["-m" "clj-kondo.main"
