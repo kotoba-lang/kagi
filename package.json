@@ -1,0 +1,17 @@
+{
+  "name": "kagi-browser-crypto",
+  "private": true,
+  "description": "Browser-side crypto deps for kagi.crypto.noble (the CLJS sibling of the JVM JCA provider). JVM consumers pulling this repo via :local/root or :git/sha never need these.",
+  "dependencies": {
+    "@noble/ciphers": "^2.2.0",
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
+    "@noble/post-quantum": "^0.6.1"
+  },
+  "devDependencies": {
+    "nbb": "^1.3.196"
+  },
+  "scripts": {
+    "test:cljs": "nbb --classpath src:test -m kagi.crypto.noble-interop-test"
+  }
+}

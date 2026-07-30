@@ -33,7 +33,8 @@ item 平文・鍵はサーバに出ない（client-side E2E、zero-knowledge）�
 
 | ns | 役割 |
 |----|------|
-| `kagi.crypto` | ★ hybrid PQC エンベロープ（Provider seam: JVM=JDK24 標準 ML-KEM-768/ML-DSA-65 + JDK-only KDF / WASM=host crypto adapter） |
+| `kagi.crypto` | ★ hybrid PQC エンベロープ（`.cljc`。Provider seam + 可搬な封緘/wrap/share ヘルパ。JVM 実装=JDK24 標準 ML-KEM-768/ML-DSA-65 は `#?(:clj ...)` 内） |
+| `kagi.crypto.noble` | 同じ `Provider` のブラウザ実装（`.cljs`、同期、純 JS `@noble/*`） |
 | `kagi.identity` | Ed25519 did:key + 鍵由来 IPNS + ML-DSA 公開鍵（CACAO 自己発行） |
 | `kagi.vault` | item/compartment/grant/version/ledger スキーマ |
 | `kagi.store` | `:db-api` seam → `MemStore` ≡ `KotobaStore`（contract test で等価保証） |
@@ -43,6 +44,33 @@ item 平文・鍵はサーバに出ない（client-side E2E、zero-knowledge）�
 | `kagi.operation` | langgraph-clj StateGraph（1 op = 1 run） |
 | `kagi.sim` | デモドライバ |
 | `kagi.import.onepassword` | kagitaba(1Password 互換 item モデル + 1PUX パーサ)から vault item を組み立てる glue 層 |
+
+## ブラウザで動かす（client-side E2E）
+
+`kagi.crypto` は `.cljc` で、`Provider` プロトコルと provider 越しの封緘/wrap/share
+ヘルパは JVM と ClojureScript の両方から見える。ブラウザ側の実装は
+**`kagi.crypto.noble`** —— `@noble/*` の純 JS 実装だけで同じ hybrid 構成
+（X25519+ML-KEM-768 / Ed25519+ML-DSA-65 / AES-256-GCM / HKDF-SHA256 / Argon2id）を満たす。
+
+- **同期のまま**。Web Crypto は AES-GCM しか要らないのに Promise を全体へ伝播させる
+  ので採らない（`kotoba-lang/org-signal` が JVM/CLJS を分けた理由はまさにこれ。
+  `@noble/*` は同期なのでその二択が発生しない）。
+- **PQC を縮退させない**。ML-KEM-768(FIPS 203) / ML-DSA-65(FIPS 204) は
+  `@noble/post-quantum` にある。**Rust/WASM は要らない。**
+- **JVM と相互運用する**。JCA は X.509/PKCS#8 の DER 符号化を graph に載せ、noble は
+  raw を扱う。KEM combiner はその符号化済みバイト列を transcript にハッシュするので、
+  `kagi.crypto.noble/wrap-der` / `unwrap-der` が 6 種の固定長 prefix を付け外しする
+  （剥がす時は prefix 一致を検証、合わなければ throw）。
+
+```sh
+npm install
+npm run test:cljs      # nbb。JVM が封緘した item/share/署名をブラウザ側が処理できるか
+clojure -M:gen-vectors # 相互運用ベクタを JVM から再生成
+clojure -M:test -n kagi.crypto.noble-reverse-test  # 逆方向（ブラウザ→JVM）
+```
+
+相互運用は**両方向**を実ベクタで検証している。片方向だけだと、ブラウザが「自分だけが
+読める独自符号化」を書いていても気づけない。
 
 ## 単一不変条件
 

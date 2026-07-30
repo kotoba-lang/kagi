@@ -1,28 +1,35 @@
 (ns kagi.crypto
-  "★ kagi の対量子(PQC)暗号コア(JVM)。
+  "★ kagi の対量子(PQC)暗号コア。
 
   方針(ADR-2606272330): 古典を捨てず PQC を **加法的(hybrid)** に重ねる。両方が破られない
   限り安全。プリミティブは `Provider` プロトコル越しにのみ呼び、実装を差し替えてもコアは
   不変に保つ(`:db-api` seam と同型)。
+
+  **この ns は `.cljc`**: `Provider` プロトコルと provider 越しの可搬ヘルパ(封緘/wrap/
+  share)は JVM と ClojureScript の両方で読める。`jvm-provider` を含む JCA 実装だけが
+  `#?(:clj ...)` の内側にある。ブラウザ側の実装は `kagi.crypto.noble`(`.cljs`) が同じ
+  `Provider` を **同期のまま** reify する — Web Crypto ではなく `@noble/*` の純 JS 実装を
+  使うので、`kotoba-lang/org-signal` が JVM/CLJS を分けた理由(「Web Crypto に同期 API が
+  無い」)がここには当たらない。Rust/WASM も要らない。
 
   jvm-provider の実装基盤(probe で確認):
     - ML-KEM-768 : **JDK 24 標準**(JEP 496, FIPS 203)。`KeyPairGenerator/KEM \"ML-KEM-768\"`。
     - ML-DSA-65  : **JDK 24 標準**(JEP 497, FIPS 204)。`Signature \"ML-DSA-65\"`。
     - Ed25519 / X25519 / AES-256-GCM / HMAC : JDK 標準。
     - Argon2id   : BouncyCastle の実 Argon2id。利用不能なら fail closed。
-  (CLJS/WASM は kotoba-crypto Rust を束ねた別ファイルの cljs provider で同 Protocol を実装。)
 
   hybrid 構成:
     - KEM     : X25519(ECDH) + ML-KEM-768。combiner = HKDF-SHA256(ss_x ‖ ss_pq, transcript)。
     - 署名     : Ed25519 + ML-DSA-65。連結し **両方 verify** で有効。
     - 対称     : AES-256-GCM(AAD=item-cid)。Grover 後も 128-bit 相当。
     - unlock  : Argon2id + passkey PRF(WebAuthn hmac-secret)。"
-  (:import [java.security KeyPairGenerator KeyFactory Signature SecureRandom MessageDigest KeyPair Key]
-           [java.security.spec X509EncodedKeySpec PKCS8EncodedKeySpec]
-           [javax.crypto Cipher Mac KEM KeyAgreement]
-           [javax.crypto.spec SecretKeySpec GCMParameterSpec]
-           [org.bouncycastle.crypto.generators Argon2BytesGenerator]
-           [org.bouncycastle.crypto.params Argon2Parameters Argon2Parameters$Builder]))
+  #?(:clj
+     (:import [java.security KeyPairGenerator KeyFactory Signature SecureRandom MessageDigest KeyPair Key]
+              [java.security.spec X509EncodedKeySpec PKCS8EncodedKeySpec]
+              [javax.crypto Cipher Mac KEM KeyAgreement]
+              [javax.crypto.spec SecretKeySpec GCMParameterSpec]
+              [org.bouncycastle.crypto.generators Argon2BytesGenerator]
+              [org.bouncycastle.crypto.params Argon2Parameters Argon2Parameters$Builder])))
 
 ;; ───────── Provider seam ─────────
 
@@ -55,7 +62,7 @@
 (defn sign-with
   "Sign with either an opaque SigningHandle or the legacy encoded secret bundle.
   The latter remains a compatibility path for migration and tests."
-  [provider signer ^bytes message]
+  [provider signer message]
   (if (satisfies? SigningHandle signer)
     (sign-hybrid signer provider message)
     (sign* provider signer message)))
@@ -67,6 +74,40 @@
     (decapsulate-hybrid recipient provider ciphertext)
     (kem-decap provider recipient ciphertext)))
 
+;; ───────── host バイト列(JVM byte[] / JS Uint8Array) ─────────
+;;
+;; provider 越しのヘルパは鍵素材を「読む」ことはせず、host のバイト列を作る・
+;; 詰める・消すだけをする。その3つだけをここで吸収すれば、封緘/wrap/share の
+;; ロジック自体は両 runtime で 1 本のまま保てる。
+
+(defn empty-bytes
+  "空のバイト列(salt/AAD 無しを表す)。JVM は `byte[]`、JS は `Uint8Array`。"
+  []
+  #?(:clj (byte-array 0) :cljs (js/Uint8Array. 0)))
+
+(defn utf8-bytes
+  "文字列を UTF-8 バイト列へ。HKDF の `info` ラベル用。"
+  [s]
+  #?(:clj (.getBytes ^String s "UTF-8")
+     :cljs (.encode (js/TextEncoder.) s)))
+
+(defn burn!
+  "共有秘密をその場でゼロ埋めする。`finally` からのみ呼ぶ。"
+  [b]
+  #?(:clj (java.util.Arrays/fill ^bytes b (byte 0))
+     :cljs (.fill b 0))
+  nil)
+
+(defn concat-bytes
+  "バイト列の列を 1 本に連結する。transcript / ikm の組み立て用。"
+  [xs]
+  #?(:clj (byte-array (mapcat seq xs))
+     :cljs (let [total (reduce + 0 (map #(.-length %) xs))
+                 out   (js/Uint8Array. total)]
+             (reduce (fn [offset x] (.set out x offset) (+ offset (.-length x)))
+                     0 xs)
+             out)))
+
 ;; ───────── 可搬ヘルパ(provider 越し) ─────────
 
 (def ^:const kem-info "kagi/kem/v1")
@@ -74,52 +115,83 @@
 
 (defn compartment-key
   "VMK から compartment-id 用の鍵を HKDF 導出。"
-  [p ^bytes vmk compartment-id]
-  (hkdf p vmk (byte-array 0)
-        (.getBytes (str "kagi/compartment/" compartment-id) "UTF-8") 32))
+  [p vmk compartment-id]
+  (hkdf p vmk (empty-bytes)
+        (utf8-bytes (str "kagi/compartment/" compartment-id)) 32))
 
 ;; ───────── item 封緘 / 開封 ─────────
 
+(defn combine-kem-shared
+  "kagi/kem/v1 の hybrid KEM combiner(可搬)。
+
+  X25519 と ML-KEM の共有秘密を、**両者の公開鍵と PQ 暗号文を綴じた transcript** に
+  bind して 1 本の 32B へ畳む。transcript に入る公開鍵は *host が符号化したそのままの
+  バイト列*(JVM なら X.509/PKCS#8 DER)なので、runtime を跨いで同じ秘密を得るには
+  符号化も一致していなければならない — `kagi.crypto.noble` はそれを満たすために
+  DER prefix を付け外しする。
+
+  `sha256-fn`/`hkdf-fn` は host 実装を注入する(`hkdf-fn` は `[ikm salt info len]`)。
+  入力の共有秘密は呼び出し側の所有のまま。ここで作った一時連結だけを消す。"
+  [sha256-fn hkdf-fn ss-x ss-pq recipient-x-public ephemeral-x-public
+   recipient-pq-public pq-ciphertext]
+  (let [transcript (sha256-fn (concat-bytes [recipient-x-public ephemeral-x-public
+                                             recipient-pq-public pq-ciphertext]))
+        ikm (concat-bytes [ss-x ss-pq])]
+    (try
+      (hkdf-fn ikm (empty-bytes)
+               (concat-bytes [(utf8-bytes kem-info) transcript]) 32)
+      (finally
+        (burn! ikm)))))
+
 (defn seal-item
   "item 平文を新規 DEK で封緘 → {:dek :nonce :ciphertext}。"
-  [p ^bytes plaintext ^bytes aad]
+  [p plaintext aad]
   (let [dek   (rand-bytes p 32)
         nonce (rand-bytes p 12)]
     {:dek dek :nonce nonce :ciphertext (aead-seal p dek nonce plaintext aad)}))
 
 (defn open-item
-  [p ^bytes dek ^bytes nonce ^bytes ciphertext ^bytes aad]
+  [p dek nonce ciphertext aad]
   (aead-open p dek nonce ciphertext aad))
 
 (defn wrap-dek
   "DEK を KEK(compartment/VMK 由来)で AES-256-GCM key-wrap。"
-  [p ^bytes kek ^bytes dek]
+  [p kek dek]
   (let [nonce (rand-bytes p 12)]
-    {:nonce nonce :wrapped (aead-seal p kek nonce dek (byte-array 0))}))
+    {:nonce nonce :wrapped (aead-seal p kek nonce dek (empty-bytes))}))
 
 (defn unwrap-dek
-  [p ^bytes kek {:keys [nonce wrapped]}]
-  (aead-open p kek nonce wrapped (byte-array 0)))
+  [p kek {:keys [nonce wrapped]}]
+  (aead-open p kek nonce wrapped (empty-bytes)))
 
 (defn share-dek
   "共有: 受信者 hybrid 公開鍵へ DEK を encapsulate(PQC) → grant envelope。"
-  [p recipient-hybrid-pk ^bytes dek]
+  [p recipient-hybrid-pk dek]
   (let [{:keys [ciphertext shared]} (kem-encap p recipient-hybrid-pk)
         nonce (rand-bytes p 12)]
     (try
       {:kem-ct ciphertext :nonce nonce
-       :wrapped (aead-seal p shared nonce dek (byte-array 0))}
+       :wrapped (aead-seal p shared nonce dek (empty-bytes))}
       (finally
-        (java.util.Arrays/fill ^bytes shared (byte 0))))))
+        (burn! shared)))))
 
 (defn accept-share
   "受信者が自分の hybrid 秘密鍵で decapsulate → DEK 復元。"
   [p hybrid-sk {:keys [kem-ct nonce wrapped]}]
   (let [shared (kem-decap-with p hybrid-sk kem-ct)]
     (try
-      (aead-open p shared nonce wrapped (byte-array 0))
+      (aead-open p shared nonce wrapped (empty-bytes))
       (finally
-        (java.util.Arrays/fill ^bytes shared (byte 0))))))
+        (burn! shared)))))
+
+;; ───────── 以降は JVM 専用(JCA + BouncyCastle) ─────────
+;;
+;; ここから下は 1 つの `#?(:clj (do ...))` に包まれている。ClojureScript から
+;; この ns を読むと、上の Provider プロトコルと可搬ヘルパだけが見え、JCA 実装は
+;; 存在しない。ブラウザ側の実装は `kagi.crypto.noble` にある。
+
+#?(:clj
+   (do
 
 ;; ───────── 低レベル JCA ヘルパ ─────────
 
@@ -222,14 +294,8 @@
   temporary concatenation is erased here."
   [^bytes ss-x ^bytes ss-pq ^bytes recipient-x-public ^bytes ephemeral-x-public
    ^bytes recipient-pq-public ^bytes pq-ciphertext]
-  (let [transcript (sha256 (ba [recipient-x-public ephemeral-x-public
-                                recipient-pq-public pq-ciphertext]))
-        ikm (ba [ss-x ss-pq])]
-    (try
-      (hkdf-sha256 ikm (byte-array 0)
-                   (ba [(.getBytes ^String kem-info "UTF-8") transcript]) 32)
-      (finally
-        (java.util.Arrays/fill ^bytes ikm (byte 0))))))
+  (combine-kem-shared sha256 hkdf-sha256 ss-x ss-pq recipient-x-public
+                      ephemeral-x-public recipient-pq-public pq-ciphertext))
 
 ;; ───────── jvm-provider(JDK24 標準 PQC + JDK-only KDF) ─────────
 
@@ -301,3 +367,5 @@
 
 ;; 後方互換: 旧称 bc-provider は jvm-provider を返す。
 (def bc-provider jvm-provider)
+
+   ))
