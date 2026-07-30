@@ -3,7 +3,9 @@
 
   The first bricked a live vault outright: every command, including the one
   the error message named as the remedy, exited non-zero."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.edn]
+            [clojure.test :refer [deftest is testing]]
+            [kagi.cli :as cli]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagitaba.category :as kcat]))
@@ -66,6 +68,63 @@
             item created by hand was uncategorised"
     (is (kcat/known? :login))
     (is (= :login (kcat/uuid->key "001")))))
+
+;; -------------------------------------------------------------- add --record
+
+(deftest a-reference-record-carries-no-secret
+  (testing "only the five reference fields exist, and the function is never
+            passed a secret to leak in the first place"
+    (let [f (str (java.io.File. (tmp-dir "kagi-record") "refs.edn"))
+          r (#'cli/record-reference!
+             f {:item "prolific-researcher-ryo" :compartment "personal"
+                :category :login :did "did:key:zTest" :now "2026-07-30T00:00:00Z"})]
+      (is (= #{:credential/item :credential/compartment :credential/category
+               :credential/vault-did :credential/recorded-at}
+             (set (keys r))))
+      (let [text (slurp f)]
+        (is (re-find #"NO SECRET VALUES" text))
+        (is (re-find #"prolific-researcher-ryo" text))
+        (is (not (re-find #"(?i)plaintext|private-b64|passphrase" text)))))))
+
+(deftest recording-the-same-item-twice-updates-rather-than-duplicates
+  (testing "a rotation must not leave two records claiming different truths"
+    (let [f (str (java.io.File. (tmp-dir "kagi-record2") "refs.edn"))
+          _ (#'cli/record-reference! f {:item "a" :compartment "personal"
+                                        :category :login :did "did:key:z1"
+                                        :now "2026-07-30T00:00:00Z"})
+          _ (#'cli/record-reference! f {:item "a" :compartment "work"
+                                        :category :password :did "did:key:z1"
+                                        :now "2026-07-31T00:00:00Z"})
+          v (read-string (slurp f))]
+      (is (= 1 (count (:credentials v))))
+      (is (= "work" (get-in v [:credentials "a" :credential/compartment])))
+      (is (= "2026-07-31T00:00:00Z"
+             (get-in v [:credentials "a" :credential/recorded-at]))))))
+
+(deftest recording-a-second-item-keeps-the-first
+  (let [f (str (java.io.File. (tmp-dir "kagi-record3") "refs.edn"))]
+    (#'cli/record-reference! f {:item "a" :compartment "personal" :category :login
+                                :did "did:key:z1" :now "t1"})
+    (#'cli/record-reference! f {:item "b" :compartment "personal" :category :login
+                                :did "did:key:z1" :now "t2"})
+    (is (= #{"a" "b"} (set (keys (:credentials (read-string (slurp f)))))))))
+
+(deftest a-record-target-that-is-not-a-map-is-refused
+  (testing "silently replacing somebody else's file would lose whatever it held"
+    (let [f (str (java.io.File. (tmp-dir "kagi-record4") "refs.edn"))]
+      (spit f "[:not :a :map]")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"record target is not a map"
+                            (#'cli/record-reference!
+                             f {:item "a" :compartment "personal"
+                                :category :login :did "d" :now "t"}))))))
+
+(deftest a-record-is-readable-as-edn
+  (testing "written with pprint, so it stays diffable — and must still parse"
+    (let [f (str (java.io.File. (tmp-dir "kagi-record5") "refs.edn"))]
+      (#'cli/record-reference! f {:item "x" :compartment "personal"
+                                  :category :login :did "did:key:z1" :now "t"})
+      (is (map? (clojure.edn/read-string (slurp f)))))))
 
 (deftest a-mistyped-category-is-rejected-rather-than-stored
   (testing "the index is only worth having if it is shared; a typo would file

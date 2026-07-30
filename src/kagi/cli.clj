@@ -10,15 +10,18 @@
 
   使い方:
     kagi init                       # 鍵生成 + vault 作成(passphrase 設定)
-    kagi add <name> [-c comp] [--category login]
+    kagi add <name> [-c comp] [--category login] [--record refs.edn]
                                     # secret を stdin/プロンプトから登録
                                     # --category は kagitaba の正準 keyword で検証する
+                                    # --record は item id 等の非機微参照だけを EDN に記録
+                                    #   (ls による総当たり列挙を避けて狙い撃ちで引くため)
     kagi get <name>                 # secret を復号して stdout に出す
     kagi ls                         # item 一覧(復号しない)
     kagi rotate <name>              # DEK を回転(再封緘)
     kagi log                        # 監査台帳(hybrid 署名 + ハッシュ鎖)を検証して表示
     kagi whoami                     # 自分の did:key / IPNS graph"
   (:require [clojure.edn :as edn]
+            [clojure.pprint :as pprint]
             [clojure.string :as str]
             [langgraph.graph :as g]
             [kagi.operation :as op]
@@ -196,9 +199,47 @@
     (f st vmk)
     (save-store! st (:meta data))))
 
+(defn- record-reference!
+  "Append or update a NON-SECRET reference to `path` so the item can be found
+  later by id.
+
+  A vault item nobody recorded is one forgotten id away from unreachable, and
+  `ls` cannot be the fallback: enumerating a vault to locate one item is the
+  exhaustive credential access the fleet's own floor forbids. A targeted
+  lookup needs a known id, so the id has to be written down — and a step that
+  has to be remembered separately is a step that gets skipped, which is why
+  this happens inside the same command that creates the secret rather than
+  afterwards by hand.
+
+  Only these five fields are ever written. There is no path by which a secret
+  reaches this function: it is not passed one."
+  [path {:keys [item compartment category did now]}]
+  (let [existing (if (.exists (java.io.File. ^String path))
+                   (let [v (edn/read-string (slurp path))]
+                     (if (map? v) v
+                         (throw (ex-info "record target is not a map" {:path path}))))
+                   {})
+        record {:credential/item item
+                :credential/compartment compartment
+                :credential/category category
+                :credential/vault-did did
+                :credential/recorded-at now}
+        merged (assoc-in existing [:credentials item]
+                         (merge (get-in existing [:credentials item]) record))
+        ;; Written through a temp file and renamed: a half-written registry is
+        ;; worse than none, because it reads as authoritative.
+        tmp (str path ".tmp")]
+    (spit tmp (with-out-str
+                (println ";; kagi credential references — NO SECRET VALUES.")
+                (println ";; Written by `kagi add --record`. Safe to commit.")
+                (pprint/pprint merged)))
+    (.renameTo (java.io.File. tmp) (java.io.File. ^String path))
+    record))
+
 (defn- cmd-add [p id args]
   (let [name (first (positional args))
         comp (or (arg-val args "-c") "personal")
+        record-path (arg-val args "--record")
         ;; `:item/category` is a non-sensitive plaintext index (vault.cljc) and
         ;; `:item/create` has always accepted it — `import onepassword` sets it
         ;; from the 1PUX category. Only `add` had no way to pass one, so every
@@ -206,7 +247,8 @@
         ;; column. An account stored as an untyped blob is not managed; it is
         ;; just a string somebody has to remember the shape of.
         cat (some-> (arg-val args "--category") keyword)]
-    (when-not name (die "usage: kagi add <name> [-c compartment] [--category kind]"))
+    (when-not name
+      (die "usage: kagi add <name> [-c compartment] [--category kind] [--record path.edn]"))
     ;; Validated against kagitaba's taxonomy rather than accepted freely: a
     ;; typo'd `--category logon` would file the item under a category nothing
     ;; else uses, and the index is only worth having if it is shared.
@@ -222,7 +264,15 @@
                                         :plaintext (.getBytes secret "UTF-8")}
                                  cat (assoc :category cat))
                    :cli-add)
-          (println "stored" name "in" comp (if cat (str "as " cat) "")))))))
+          (println "stored" name "in" comp (if cat (str "as " cat) ""))
+          ;; After the store, never before: a reference to an item that failed
+          ;; to save would send a later reader to fetch something absent.
+          (when record-path
+            (let [r (record-reference! record-path
+                                       {:item name :compartment comp
+                                        :category cat :did (:did id)
+                                        :now (str (Instant/now))})]
+              (println "recorded" (:credential/item r) "->" record-path))))))))
 
 (defn- cmd-get [p id args]
   (let [name (first (positional args))]
@@ -248,17 +298,25 @@
         (let [r (run-op! p id st vmk {:op :item/reveal :item-id name} purpose)
               pt (get-in r [:result :plaintext])]
           (if pt
-            (let [secret (String. ^bytes pt "UTF-8")
-                  result (clipboard/copy-secret-with-ttl!
-                          (clipboard/macos-clipboard)
-                          secret
-                          {:ttl-ms (* ttl-sec 1000)})]
-              (println (pr-str (merge result
-                                      {:item name
-                                       :purpose purpose
-                                       :provider :macos-pbcopy
-                                       :approval :human-approved
-                                       :secret? false}))))
+            (let [secret (String. ^bytes pt "UTF-8")]
+              ;; Printed BEFORE the wait, so the operator can paste while this
+              ;; holds custody. It used to print and exit, which killed the
+              ;; daemon thread that was supposed to clear the clipboard and
+              ;; left the secret pasteable indefinitely.
+              (println (pr-str {:item name :purpose purpose
+                                :ttl-ms (* ttl-sec 1000)
+                                :provider :macos-pbcopy
+                                :approval :human-approved
+                                :holding-until-ttl? true
+                                :secret? false}))
+              (flush)
+              (let [result (clipboard/copy-secret-with-ttl!
+                            (clipboard/macos-clipboard)
+                            secret
+                            {:ttl-ms (* ttl-sec 1000) :block? true})]
+                (println (pr-str (select-keys result
+                                              [:cleared? :clear-mechanism
+                                               :ttl-ms])))))
             (die "reveal denied:" (get-in r [:result :effect]))))))))
 
 (defn- cmd-ls []
