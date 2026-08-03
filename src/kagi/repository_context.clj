@@ -79,18 +79,23 @@
      {1 root-vmk}
      (or (:keys keyring) {}))))
 
-(defn- load-identity [identity-file]
+(defn- load-identity [identity-file identity-secret-store]
   (let [identity-map (edn/read-string (slurp identity-file))]
-    (if (identity/secret-backed-identity? identity-map)
-      (identity/load-secret-backed-identity
-       identity-map (secret-store/store-for-ref (:secret-ref identity-map)))
-      (identity/load-identity identity-map))))
+    (when-not (identity/secret-backed-identity? identity-map)
+      (throw (ex-info "repository runtime requires SecretStore-backed identity"
+                      {:type :kagi/repository-plaintext-identity-denied
+                       :identity (.getPath identity-file)})))
+    (identity/load-secret-backed-identity
+     identity-map
+     (or identity-secret-store
+         (secret-store/store-for-ref (:secret-ref identity-map))))))
 
 (defn- initial-key-id [repository-id]
   (str "repository-vmk:" repository-id ":1"))
 
 (defn- build-context
-  [provider home identity-file root-vmk meta repository-id requested-epoch]
+  [provider home identity-file identity-secret-store root-vmk meta
+   repository-id requested-epoch]
   (let [repository-id (repository-id! repository-id)
         keyring (keyring-for meta repository-id)
         vmks (repository-vmks provider root-vmk meta repository-id)
@@ -102,7 +107,7 @@
                       {:type :kagi/repository-key-epoch-unavailable
                        :key/epoch key-epoch
                        :available-epochs (vec (sort (keys vmks)))})))
-    (let [identity* (load-identity identity-file)
+    (let [identity* (load-identity identity-file identity-secret-store)
           envelopes (or (:keys keyring) {})
           kek (crypto/compartment-key provider root-vmk
                                       (keyring-compartment repository-id))]
@@ -123,7 +128,8 @@
        :vault-home (.getPath home)})))
 
 (defn- load-material
-  [{:keys [vault-home provider unlock-vmk-fn repository-id]
+  [{:keys [vault-home provider unlock-vmk-fn repository-id
+           identity-secret-store]
     :or {provider (crypto/jvm-provider)}}]
   (let [home (home-file vault-home)
         vault-file (io/file home "vault.edn")
@@ -136,15 +142,17 @@
                        :identity (.getPath identity-file)})))
     {:home home :vault-file vault-file :identity-file identity-file
      :vault vault :meta (:meta vault) :provider provider
+     :identity-secret-store identity-secret-store
      :repository-id (repository-id! repository-id)
      :root-vmk (unlock-root-vmk provider (:meta vault) unlock-vmk-fn)}))
 
 (defn load-context
   [{:keys [key-epoch] :as options}]
-  (let [{:keys [provider home identity-file root-vmk meta repository-id]}
+  (let [{:keys [provider home identity-file identity-secret-store root-vmk
+                meta repository-id]}
         (load-material options)]
-    (build-context provider home identity-file root-vmk meta repository-id
-                   key-epoch)))
+    (build-context provider home identity-file identity-secret-store root-vmk
+                   meta repository-id key-epoch)))
 
 (defn prepare-repository-vmk-rotation
   "Stage the next random repository VMK and signed Kagi rotation event. Nothing
@@ -154,7 +162,8 @@
   (when-not (pos-int? expected-epoch)
     (throw (ex-info "positive expected repository key epoch is required"
                     {:type :kagi/repository-key-epoch-required})))
-  (let [{:keys [provider home identity-file root-vmk meta repository-id]}
+  (let [{:keys [provider home identity-file identity-secret-store root-vmk
+                meta repository-id]}
         (load-material options)
         keyring (keyring-for meta repository-id)
         current-epoch (long (or (:current-epoch keyring) 1))]
@@ -162,7 +171,7 @@
       (throw (ex-info "repository VMK epoch is stale"
                       {:type :kagi/repository-key-epoch-stale
                        :expected expected-epoch :actual current-epoch})))
-    (let [identity* (load-identity identity-file)
+    (let [identity* (load-identity identity-file identity-secret-store)
           next-epoch (inc current-epoch)
           next-vmk (crypto/rand-bytes provider 32)
           kek (crypto/compartment-key provider root-vmk
@@ -193,8 +202,8 @@
                                     :current-event-id (:rotation/id event))
                              (assoc-in [:keys next-epoch] envelope))
           meta* (assoc-in meta (keyring-path repository-id) staged-keyring)]
-      (assoc (build-context provider home identity-file root-vmk meta*
-                            repository-id next-epoch)
+      (assoc (build-context provider home identity-file identity-secret-store
+                            root-vmk meta* repository-id next-epoch)
              :repository-rotation-event event
              :rotation/staged? true))))
 
@@ -212,13 +221,13 @@
     (.mkdirs home)
     (with-open [stream (java.io.FileOutputStream. lock-file true)
                 _lock (.lock (.getChannel stream))]
-      (let [{:keys [provider home vault-file identity-file vault root-vmk meta
-                    repository-id]}
+      (let [{:keys [provider home vault-file identity-file identity-secret-store
+                    vault root-vmk meta repository-id]}
             (load-material options)
             keyring (keyring-for meta repository-id)
             current-epoch (long (or (:current-epoch keyring) 1))
             existing (get-in keyring [:keys key-epoch])
-            identity* (load-identity identity-file)
+            identity* (load-identity identity-file identity-secret-store)
             expected-parent (:current-event-id keyring)
             current {:subject (str "repository:" repository-id)
                      :purpose :repository-vmk
@@ -240,8 +249,8 @@
           (crypto/unwrap-dek provider kek key-envelope))
         (cond
           (and (= current-epoch key-epoch) same-envelope?)
-          (build-context provider home identity-file root-vmk meta repository-id
-                         key-epoch)
+          (build-context provider home identity-file identity-secret-store
+                         root-vmk meta repository-id key-epoch)
 
           (not= key-epoch (inc current-epoch))
           (throw (ex-info "repository rotation events must be adopted in order"
@@ -270,5 +279,5 @@
                                  (assoc-in [:keys key-epoch] key-envelope))
                 meta* (assoc-in meta (keyring-path repository-id) next-keyring)]
             (persist/save! (.getPath vault-file) (assoc vault :meta meta*))
-            (build-context provider home identity-file root-vmk meta*
-                           repository-id key-epoch)))))))
+            (build-context provider home identity-file identity-secret-store
+                           root-vmk meta* repository-id key-epoch)))))))

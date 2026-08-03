@@ -4,7 +4,8 @@
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.persist :as persist]
-            [kagi.repository-context :as context])
+            [kagi.repository-context :as context]
+            [kagi.secret-store :as secret-store])
   (:import [java.nio.file Files]
            [java.util Arrays]))
 
@@ -15,9 +16,9 @@
                               (str (System/getProperty "java.io.tmpdir")
                                    "/kagi-missing-repository-context")}))))
 
-(deftest explicit-host-unlock-builds-repository-context
+(deftest repository-runtime-refuses-development-plaintext-identity
   (let [home (.toFile (Files/createTempDirectory
-                       "kagi-repository-context"
+                       "kagi-repository-plaintext-identity"
                        (make-array java.nio.file.attribute.FileAttribute 0)))
         provider (crypto/jvm-provider)
         vmk (crypto/rand-bytes provider 32)]
@@ -25,8 +26,26 @@
     (identity/load-or-create-identity!
      (.getPath (io/file home "identity.edn")) provider
      {:allow-plaintext? true})
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"SecretStore-backed"
+         (context/load-context
+          {:vault-home home :provider provider
+           :unlock-vmk-fn (fn [_ _] vmk)})))))
+
+(deftest explicit-host-unlock-builds-repository-context
+  (let [home (.toFile (Files/createTempDirectory
+                       "kagi-repository-context"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        provider (crypto/jvm-provider)
+        secrets (secret-store/mem-secret-store)
+        vmk (crypto/rand-bytes provider 32)]
+    (persist/save! (.getPath (io/file home "vault.edn")) {:meta {}})
+    (identity/load-or-create-identity!
+     (.getPath (io/file home "identity.edn")) provider
+     {:secret-store secrets :secret-ref "mem://identity/context"})
     (let [loaded (context/load-context
                   {:vault-home home :provider provider
+                   :identity-secret-store secrets
                    :unlock-vmk-fn (fn [_ _] vmk)})]
       (is (Arrays/equals vmk (:vmk loaded)))
       (is (= 1 (:key-epoch loaded)))
@@ -39,33 +58,39 @@
                        "kagi-repository-keyring"
                        (make-array java.nio.file.attribute.FileAttribute 0)))
         provider (crypto/jvm-provider)
+        secrets (secret-store/mem-secret-store)
         root-vmk (crypto/rand-bytes provider 32)
         unlock-fn (fn [_ _] root-vmk)]
     (persist/save! (.getPath (io/file home "vault.edn")) {:meta {}})
     (identity/load-or-create-identity!
      (.getPath (io/file home "identity.edn")) provider
-     {:allow-plaintext? true})
+     {:secret-store secrets :secret-ref "mem://identity/keyring"})
     (let [staged (context/prepare-repository-vmk-rotation
                   {:vault-home home :provider provider
                    :repository-id "user-storage-a"
+                   :identity-secret-store secrets
                    :unlock-vmk-fn unlock-fn :expected-epoch 1})
           before-admission (context/load-context
                             {:vault-home home :provider provider
                              :repository-id "user-storage-a"
+                             :identity-secret-store secrets
                              :unlock-vmk-fn unlock-fn})
           rotated (context/adopt-repository-vmk!
                    {:vault-home home :provider provider
                     :repository-id "user-storage-a"
+                    :identity-secret-store secrets
                     :unlock-vmk-fn unlock-fn :key-epoch 2
                     :key-envelope (get (:key-envelopes staged) 2)
                     :rotation-event (:repository-rotation-event staged)})
           reloaded (context/load-context
                     {:vault-home home :provider provider
                      :repository-id "user-storage-a"
+                     :identity-secret-store secrets
                      :unlock-vmk-fn unlock-fn})
           old (context/load-context
                {:vault-home home :provider provider
                 :repository-id "user-storage-a"
+                :identity-secret-store secrets
                 :unlock-vmk-fn unlock-fn :key-epoch 1})
           raw-vault (slurp (io/file home "vault.edn"))]
       (is (= 1 (:key-epoch before-admission))
@@ -83,32 +108,37 @@
            (context/prepare-repository-vmk-rotation
             {:vault-home home :provider provider
              :repository-id "user-storage-a"
+             :identity-secret-store secrets
              :unlock-vmk-fn unlock-fn :expected-epoch 1}))))))
 
 (deftest another-device-adopts-a-signed-head-key-envelope
   (let [provider (crypto/jvm-provider)
         root-vmk (crypto/rand-bytes provider 32)
+        secrets (secret-store/mem-secret-store)
         unlock-fn (fn [_ _] root-vmk)
         new-home (fn [prefix]
                    (let [home (.toFile (Files/createTempDirectory
                                         prefix
                                         (make-array java.nio.file.attribute.FileAttribute 0)))]
                      (persist/save! (.getPath (io/file home "vault.edn")) {:meta {}})
-                     (identity/load-or-create-identity!
-                      (.getPath (io/file home "identity.edn")) provider
-                      {:allow-plaintext? true})
                      home))
         device-a (new-home "kagi-key-device-a")
         device-b (new-home "kagi-key-device-b")
+        _ (identity/load-or-create-identity!
+           (.getPath (io/file device-a "identity.edn")) provider
+           {:secret-store secrets
+            :secret-ref "mem://identity/shared-device"})
         _ (spit (io/file device-b "identity.edn")
                 (slurp (io/file device-a "identity.edn")))
         staged (context/prepare-repository-vmk-rotation
                 {:vault-home device-a :provider provider
                  :repository-id "shared-user-storage"
+                 :identity-secret-store secrets
                  :unlock-vmk-fn unlock-fn :expected-epoch 1})
         adopted (context/adopt-repository-vmk!
                  {:vault-home device-b :provider provider
                   :repository-id "shared-user-storage"
+                  :identity-secret-store secrets
                   :unlock-vmk-fn unlock-fn :key-epoch 2
                   :key-envelope (get (:key-envelopes staged) 2)
                   :rotation-event (:repository-rotation-event staged)})]
