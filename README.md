@@ -177,6 +177,21 @@ bin/kagi ui --ttl 30 --idle 300
 revoke）/ **Vault**（unlock envelope と did / graph）。1 文書・script なし・
 `Content-Security-Policy: default-src 'none'`。
 
+- **絞り込みは GET。** id / compartment / category に部分一致（大文字小文字を問わない）。
+  **ciphertext には触らない** —— 一覧を検索することは vault を開く理由にならないので、
+  secret の中身にしか一致しない語は 0 件になる。それが正しい答え。
+  「0 件」と「item が 1 つも無い」は別の画面として描く。
+- **item 名をクリックすると 1 件だけ開く。** ここで初めて復号が起き、
+  governor を通り、台帳に purpose `:ui-detail` で残る（Copy の `:ui-copy` とは
+  別の語 —— 形を見たことと値を取ったことは別の行為）。**開いても機微値は出ない**:
+  `kagi.vault-read/strip-sensitive` が concealed / totp / credit-card / ssh-key の値を
+  落とし、画面には「設定済み・伏せてある」とだけ出る（field ごと消すと「未設定」に
+  見えてしまうため、field は残す）。値が出る経路は Copy だけ。
+- **一覧を描くだけでは何も開かない。** `:detail` は item を名指しされた時にだけ呼ばれる
+  （検査あり）。開いた結果は 4 通りを 4 つとも別の画面にする ——
+  `:ok`（構造）/ `:raw`（`kagi add` の素の値。構造が無いので値も出さない）/
+  `:denied`（governor の拒否）/ `:absent`（そんな item は無い）。
+
 - **平文はブラウザに渡らない。** Copy は governor 経由で復号し、値を
   **この JVM から直接 clipboard** に置く。ページにも loopback socket にも
   平文は出ない。TTL は `kagi copy` と同じ既定 45 秒で、内容が変わっていなければ消える。
@@ -280,7 +295,7 @@ clojure -M:dev:cli <cmd>  # CLI（bin/kagi と同じ）
 >   actor `:authn` が CACAO を実検証し、失敗を `:hold` に送る。
 > - **メンバー登録/共有**: `:authn` が depth-1 self-mint 登録、実 identity 同士の PQC 共有。
 >
-> 検証: **220 tests / 801 assertions + 3 browser tests pass**(2026-08-23 実測。KEM 往復・署名 tamper reject・PQC 共有・KDF・
+> 検証: **238 tests / 874 assertions + 3 browser tests pass**(2026-08-23 実測。KEM 往復・署名 tamper reject・PQC 共有・KDF・
 > 台帳改竄検知・CACAO 詐称/改竄 reject・authn 強制)。ブラウザ provider は
 > `kagi.crypto.noble`(純 JS `@noble/*`、Rust ではない)、`KotobaStore` は注入式
 > `SealedBlockStore` と暗号文E2E contract testを持つ。CLIの既定は local snapshot、

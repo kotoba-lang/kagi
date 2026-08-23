@@ -177,8 +177,15 @@
        (get (form-decode (.getQuery (.getRequestURI exchange))) k))
 
      (defn- page-for
-       [{:keys [actions css token flash confirm]}]
-       (ui/document (merge {:css css :token token :flash flash :confirm confirm}
+       "`:snapshot` is called on every render; `:detail` only when one item was
+       asked for. That ordering is the point: opening an item decrypts it, so
+       it happens when the reader names one, and never as part of drawing a
+       list."
+       [{:keys [actions css token flash confirm query item]}]
+       (ui/document (merge {:css css :token token :flash flash :confirm confirm
+                            :q query
+                            :detail (when-not (str/blank? (str item))
+                                      ((:detail actions) item))}
                            ((:snapshot actions)))))
 
      (defn- redirect! [exchange fragment flash-atom flash]
@@ -279,7 +286,9 @@
                                          ;; This only chooses which control the
                                          ;; devices view draws — nothing is
                                          ;; decided here.
-                                         :confirm (query-param exchange "confirm")}))
+                                         :confirm (query-param exchange "confirm")
+                                         :query (query-param exchange "q")
+                                         :item (query-param exchange "item")}))
 
                     (not= "POST" method)
                     (refuse! exchange 404 "not-found")

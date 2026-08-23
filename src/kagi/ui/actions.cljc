@@ -38,6 +38,12 @@
   specific has `kagi copy --purpose`, where the flag is required."
   :ui-copy)
 
+(def detail-purpose
+  "What the ledger records for opening one item in the window. Distinct from
+  `copy-purpose`: reading an item's shape and taking its value are different
+  acts, and an audit that cannot tell them apart is worth less."
+  :ui-detail)
+
 #?(:clj
    (defn actions
   "Build the action map `kagi.ui.server/start!` expects.
@@ -64,6 +70,17 @@
                 :graph (:graph (:identity session))
                 :home (vault-read/redact-home (or vault-home (:vault-home session)))
                 :unlock (unlock/status @meta-state)}})
+
+     :detail
+     (fn [item-id]
+       (if (str/blank? (str item-id))
+         {:status :absent :item-id item-id}
+         ;; `read-one` answers :ok / :raw / :denied / :absent as four
+         ;; distinguishable things. The window draws four different screens
+         ;; from them, because "the governor said no" and "there is no such
+         ;; item" are not the same news.
+         (assoc (vault-read/read-one session item-id detail-purpose)
+                :item-id item-id)))
 
      :copy!
      (fn [item-id]

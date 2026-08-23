@@ -15,6 +15,7 @@
   to it by `kagi ui` really do reach the governor, and that a plaintext which
   genuinely exists still never reaches the page."
   (:require [clojure.string :as str]
+            [kagitaba.item :as kitem]
             [clojure.test :refer [deftest is testing]]
             [kagi.clipboard :as clipboard]
             [kagi.crypto :as crypto]
@@ -30,6 +31,17 @@
             HttpRequest$BodyPublishers HttpResponse$BodyHandlers]))
 
 (def ^:private gh-secret "ghp_this_value_must_never_render")
+(def ^:private claude-password "hunter2-must-never-render")
+
+(def ^:private claude-item
+  "A real kagitaba item, sealed into the vault as its plaintext — which is
+  what `kagi import onepassword` puts there."
+  (kitem/item* {:category :membership :title "Claude Pro"
+                :sections [{:title "Login"
+                            :fields [{:id "username" :title "username"
+                                      :type :string :value "jun@example.com"}
+                                     {:id "password" :title "password"
+                                      :type :concealed :value claude-password}]}]}))
 
 (defn- send! [method url headers body]
   (let [b (HttpRequest/newBuilder (URI/create url))]
@@ -57,6 +69,7 @@
                  :vmk (crypto/rand-bytes p 32) :store st :vault-home "/tmp/kagi-ui-test"}]
     (seed! session "gh-token" "work" :api-credential gh-secret)
     (seed! session "b2-key" "personal" :api-credential "b2-value")
+    (seed! session "claude-pro" "personal" :membership (pr-str claude-item))
     session))
 
 (defn- meta-with-devices []
@@ -181,3 +194,44 @@
         (is (not (str/includes? page (.encodeToString (java.util.Base64/getEncoder)
                                                       ^bytes (:vmk session))))
             "the VMK is on the page")))))
+
+;; ── opening one item ───────────────────────────────────────────────────────
+
+(deftest opening-a-kagitaba-item-shows-its-shape-and-hides-its-secret
+  (with-window
+    (fn [{:keys [window]}]
+      (let [page (.body (send! "GET" (str (:origin window) "/?item=claude-pro")
+                               {"Cookie" (str "kagi_ui_session=" (:token window))} nil))]
+        (is (str/includes? page "Claude Pro") "the title came out of the vault")
+        (is (str/includes? page "jun@example.com") "a non-sensitive field is shown")
+        (is (str/includes? page "設定済み・伏せてある")
+            "the concealed field is marked SET, not left looking unset")
+        (is (not (str/includes? page claude-password))
+            "a real concealed value reached the page")))))
+
+(deftest opening-a-raw-secret-says-so-and-shows-nothing
+  (with-window
+    (fn [{:keys [window]}]
+      (let [page (.body (send! "GET" (str (:origin window) "/?item=gh-token")
+                               {"Cookie" (str "kagi_ui_session=" (:token window))} nil))]
+        (is (str/includes? page "素の secret"))
+        (is (not (str/includes? page gh-secret)))))))
+
+(deftest an-item-the-governor-will-not-open-is-drawn-as-refused
+  (with-redefs [ui-actions/detail-purpose nil]
+    (with-window
+      (fn [{:keys [window]}]
+        (let [page (.body (send! "GET" (str (:origin window) "/?item=claude-pro")
+                                 {"Cookie" (str "kagi_ui_session=" (:token window))} nil))]
+          (is (str/includes? page "governor が拒否"))
+          (is (not (str/includes? page "Claude Pro"))
+              "a refused open still drew the item")
+          (is (not (str/includes? page claude-password))))))))
+
+(deftest an-item-that-is-not-there-is-not-a-refusal
+  (with-window
+    (fn [{:keys [window]}]
+      (let [page (.body (send! "GET" (str (:origin window) "/?item=no-such-item")
+                               {"Cookie" (str "kagi_ui_session=" (:token window))} nil))]
+        (is (str/includes? page "そんな item は無い"))
+        (is (not (str/includes? page "governor が拒否")))))))
