@@ -43,6 +43,8 @@
             [kagi.recovery-io :as recovery-io]
             [kagi.passkey :as passkey]
             [kagi.passkey-bridge :as passkey-bridge]
+            [kagi.ui.actions :as ui-actions]
+            [kagi.ui.server :as ui-server]
             [kagi.sync :as sync]
             [kagi.import.onepassword :as import-1p]
             [kagitaba.category :as kcat])
@@ -561,6 +563,56 @@
           (println (pr-str {:ok? true :enabled :passkey-prf :secret? false}))))
       (finally ((:stop bridge))))))
 
+(def ^:private ui-clipboard-ttl-sec
+  "Same default as `kagi copy`. A window does not get a longer grace period
+  than the command does — the clipboard is the same machine-wide surface
+  either way."
+  45)
+
+(defn- cmd-ui
+  "Open the local vault window: the item list, the enrolled devices, and how
+  this vault unlocks.
+
+  The vault is opened ONCE, here, where unlock already knows how to prompt —
+  `kagi.vault-read/open` deliberately cannot (a server process has no TTY, and
+  a prompt would hang a request). What the window can do is
+  `kagi.ui.actions`; what serves it is `kagi.ui.server`, which is handed those
+  three functions and never sees the vault. This command is the wiring and
+  nothing else."
+  [p id args]
+  (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))
+        vmk (unlock-vmk-auto p (:meta data))
+        st (load-store (dissoc data :meta))
+        meta-state (atom (:meta data))
+        ttl-sec (parse-long* (arg-val args "--ttl") ui-clipboard-ttl-sec)
+        idle-sec (parse-long* (arg-val args "--idle") 900)
+        window (ui-server/start!
+                {:css (ui-server/dds-css)
+                 :rand-fn #(crypto/rand-bytes p %)
+                 :idle-timeout-seconds idle-sec
+                 :actions (ui-actions/actions
+                           {:session {:status :open :provider p :identity id
+                                      :did (:did id) :vmk vmk :store st}
+                            :meta-state meta-state
+                            :save! #(save-store! st %)
+                            :clipboard (clipboard/macos-clipboard)
+                            :copy-ttl-sec ttl-sec
+                            :vault-home vault-path})})]
+    (try
+      (println (pr-str {:ok? true :window (:origin window)
+                        :idle-timeout-sec idle-sec
+                        :clipboard-ttl-sec ttl-sec
+                        :secret? false}))
+      (if (and (Desktop/isDesktopSupported)
+               (.isSupported (Desktop/getDesktop) Desktop$Action/BROWSE))
+        (.browse (Desktop/getDesktop) (URI/create (:url window)))
+        (println "open in a browser:" (:url window)))
+      (println (str "Ctrl-C で閉じる。" idle-sec " 秒 無操作でも閉じる。"))
+      (flush)
+      ((:await window))
+      (println (pr-str {:ok? true :closed true :secret? false}))
+      (finally ((:stop window))))))
+
 (defn- cmd-recovery-create [p args]
   (let [out (or (arg-val args "--out") (die "recovery create requires --out DIR"))
         k (parse-long* (arg-val args "--threshold") 3)
@@ -623,6 +675,8 @@ kagi — 自己主権・対量子(PQC) secrets vault (op 相当)
   kagi copy <name> --purpose p [--ttl 45]
                             secret を stdout に出さず clipboard へ一時コピー
   kagi ls                   item 一覧
+  kagi ui [--ttl 45] [--idle 900]
+                            item / 端末 / unlock を見る窓を 127.0.0.1 に開く
   kagi import onepassword <file.1pux> [-c compartment] [--include-archived]
                             1Password の 1PUX export を取り込む(kagitaba 経由)
   kagi rotate <name>        DEK 回転(再封緘)
@@ -700,6 +754,7 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
         "identity-migrate" (cmd-identity-migrate p id args)
         "unlock-enable-keychain" (cmd-unlock-enable-keychain p id args)
         "unlock-status" (cmd-unlock-status)
+        "ui"     (cmd-ui p id args)
         "device" (case (second args)
                    "request" (cmd-device-request p args)
                    "grant"   (cmd-device-grant p args)
