@@ -13,6 +13,16 @@
         {:git/url "https://github.com/kotoba-lang/langgraph.git"
          :git/sha "577a59a9d5eb3ef90b81342f4673973f481ff7f4"}
         org.clojure/data.json {:mvn/version "2.5.0"}
+        ;; jp-go-digital-design-system — デジタル庁デザインシステム(DADS)。
+        ;; This workspace's BASE design system (owner decision 2026-08-05), and
+        ;; the whole of `kagi ui`'s client: the window is one server-rendered
+        ;; document with no script, so the design system IS the front end.
+        ;; Pulled at runtime rather than test-time because `kagi ui` renders on
+        ;; demand from the live vault session — there is no build step whose
+        ;; output could be committed instead.
+        io.github.kotoba-lang/jp-go-digital-design-system
+        {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system.git"
+         :git/sha "dc4602dc17bce8f6e9ba038e92b3e95fcc411b49"}
         ;; 1Password 互換 keychain データモデル + 1PUX import(crypto/store 非依存、
         ;; ADR-2607023000)。kagi は kagitaba item を pr-str して DEK 封緘パイプラインに通す。
         io.github.kotoba-lang/kagitaba

@@ -133,6 +133,7 @@ bin/kagi init                         # 鍵生成 + vault 作成（master passph
 printf '%s' "$SECRET" | bin/kagi add gh-token -c work   # secret を stdin から登録
 bin/kagi get gh-token                 # 復号して stdout へ（パイプ可）
 bin/kagi ls                           # item 一覧（復号しない）
+bin/kagi ui [--ttl 45] [--idle 900]   # item / 端末 / unlock を見る窓を 127.0.0.1 に開く
 bin/kagi import onepassword <file.1pux> [-c compartment] [--include-archived]
                                        # 1Password の 1PUX export を取り込む（kagitaba 経由）
 bin/kagi rotate gh-token              # DEK を回転（再封緘、平文は不変）
@@ -162,6 +163,37 @@ bin/kagi sync                         # pull後のremote seq一致時だけpush�
     ローテーションする羽目になった実例、ADR-2607170500 — の再発防止）。旧 `./.kagi/`
     （repo-local）しか無い環境では初回アクセス時に自動で home へ移行する。
 - `op` 対応: `op item get` → `kagi get` / `op item create` → `kagi add` / `op item list` → `kagi ls`。
+
+## ローカルの窓（`kagi ui`）
+
+1Password の一覧画面にあたるものを、**この端末の 127.0.0.1 にだけ**開く。
+
+```bash
+bin/kagi ui               # 既定のブラウザが開く。Ctrl-C か 900 秒無操作で閉じる
+bin/kagi ui --ttl 30 --idle 300
+```
+
+見えるのは 3 面 —— **Items**（item 一覧。復号しない）/ **Devices**（登録端末と
+revoke）/ **Vault**（unlock envelope と did / graph）。1 文書・script なし・
+`Content-Security-Policy: default-src 'none'`。
+
+- **平文はブラウザに渡らない。** Copy は governor 経由で復号し、値を
+  **この JVM から直接 clipboard** に置く。ページにも loopback socket にも
+  平文は出ない。TTL は `kagi copy` と同じ既定 45 秒で、内容が変わっていなければ消える。
+- **開けるのはこの端末のブラウザだけ。** 3 つの独立した門: ①socket が 127.0.0.1
+  ②`?token=` を 1 度だけ受けて cookie に替え、URL からは消す（HttpOnly /
+  SameSite=Strict）③POST は body にも同じ token を要求する（cookie は「この
+  ブラウザ」の証明、form token は「このページ」の証明）。拒否は必ず理由の名前を返す
+  （`no-session` / `bad-origin` / `bad-form-token`）。
+- **revoke は 2 手。** 一覧の Revoke は GET のリンクで、何も変えずに確認を出す。
+  実際に変えるのは POST の側だけ。
+- **vault を開けるのは CLI 側で 1 度だけ。** server は
+  `kagi.ui.actions` の 3 関数だけを渡され、vault も VMK も持たない。
+
+> **なぜ JavaScript が無いか。** ここは vault を開いた session の隣で動くページなので、
+> 「このページの script に何ができるか」への一番安い正しい答えは **script が無いこと**。
+> 代わりに失うのは mount で、操作のたびに文書を描き直す —— loopback では数ミリ秒。
+> ADR-2608231200（superproject）。
 
 ## cloud 永続化（iCloud Keychain / 1Password 相当、ADR-2607170500）
 
@@ -248,7 +280,7 @@ clojure -M:dev:cli <cmd>  # CLI（bin/kagi と同じ）
 >   actor `:authn` が CACAO を実検証し、失敗を `:hold` に送る。
 > - **メンバー登録/共有**: `:authn` が depth-1 self-mint 登録、実 identity 同士の PQC 共有。
 >
-> 検証: **60 tests / 369 assertions + 3 browser tests pass**(KEM 往復・署名 tamper reject・PQC 共有・KDF・
+> 検証: **220 tests / 801 assertions + 3 browser tests pass**(2026-08-23 実測。KEM 往復・署名 tamper reject・PQC 共有・KDF・
 > 台帳改竄検知・CACAO 詐称/改竄 reject・authn 強制)。ブラウザ provider は
 > `kagi.crypto.noble`(純 JS `@noble/*`、Rust ではない)、`KotobaStore` は注入式
 > `SealedBlockStore` と暗号文E2E contract testを持つ。CLIの既定は local snapshot、
