@@ -130,11 +130,51 @@
 /* A table is the wrong shape below ~40rem; let it scroll rather than crush
    the row it is describing. */
 .kagi-scroll{overflow-x:auto}
+.kagi-search{display:flex;flex-wrap:wrap;gap:var(--hig-spacing-2);
+             align-items:flex-end;margin:0 0 var(--hig-spacing-4)}
+.kagi-detail-head{justify-content:space-between}
 "))
 
 ;; ───────── views ─────────
 
 (defn- hidden [name value] [:input {:type "hidden" :name name :value (str value)}])
+
+(defn- url-encode [s]
+  #?(:clj (java.net.URLEncoder/encode (str s) "UTF-8")
+     :cljs (js/encodeURIComponent (str s))))
+
+(defn matching-items
+  "Filter the item list by a typed query.
+
+  Matches the id, the compartment and the category, case-insensitively, on
+  substring — the three things the row shows. Nothing here touches a
+  ciphertext, so searching a vault is not a reason to decrypt it: a query
+  that would only match on a secret's contents finds nothing, which is the
+  correct answer for a list screen that does not open items.
+
+  A blank query matches everything, and does so without a special case:
+  every string contains the empty string. There used to be an `if` here
+  saying the same thing, which looked like a guard and could not fail — the
+  substring rule already produced the identical answer, so breaking the
+  branch changed nothing and no test could tell. What it was really there for
+  is the behaviour, not the branch: submitting the form with nothing typed
+  must show the whole vault, never an empty one."
+  [items q]
+  (let [q (str/lower-case (str/trim (str q)))]
+    (vec (filter (fn [it]
+                   (some #(str/includes? (str/lower-case (str %)) q)
+                         [(:item/id it)
+                          (:item/compartment it)
+                          (some-> (:item/category it) name)]))
+                 items))))
+
+(defn item-href
+  "The address of one item's detail panel, keeping whatever search the reader
+  had typed so that closing the panel does not also clear the filter."
+  [item-id q]
+  (str "/?item=" (url-encode item-id)
+       (when-not (str/blank? (str q)) (str "&q=" (url-encode q)))
+       (:fragment (view-by-id :items))))
 
 (defn- action-form
   "A POST that carries the session token in the body as well as the cookie.
@@ -146,34 +186,137 @@
          (hidden "token" token)]
         body))
 
+(defn- search-form
+  "Filtering is a GET with the query in the address, so a filtered list is a
+  URL: reloadable, bookmarkable, and back-buttonable. Nothing about it is a
+  state change, which is why it is not a POST."
+  [q]
+  [:form {:method "get" :action "/" :class "kagi-search" :role "search"}
+   (dds/form-field
+    {:label "検索" :for "q"}
+    (dds/input-text {:id "q" :name "q" :value (str q) :size "md"
+                     :placeholder "item / compartment / category"
+                     :autocomplete "off"}))
+   (dds/button "絞り込む" {:type :outline :size "sm" :submit? true})
+   (when-not (str/blank? (str q))
+     (dds/button "解除" {:type :text :size "sm"
+                         :href (str "/" (:fragment (view-by-id :items)))}))])
+
+(defn- field-row
+  "One kagitaba field. A concealed value is shown as SET, not as empty:
+  `strip-sensitive` keeps the field and drops the value for exactly this
+  reason — 'there is a password' and 'there is no password' are different
+  facts, and an empty cell says the second one."
+  [f]
+  [(str (or (:field/title f) (:field/id f)))
+   (str (some-> (:field/type f) name))
+   (if (:field/redacted? f)
+     (dds/chip-label "設定済み・伏せてある" {:color "gray"})
+     [:span {:class "kagi-mono"} (str (or (:field/value f) "—"))])])
+
+(defn- detail-card
+  "One item, opened.
+
+  Opening decrypts — through the same governor graph as everything else, with
+  its own purpose in the ledger — and then drops every sensitive value before
+  the structure gets here. So this shows what an item IS (title, username,
+  urls, which fields are set) and never what its secrets ARE. The value only
+  ever leaves through Copy, into the clipboard."
+  [{:keys [detail token q]}]
+  (let [{:keys [status item]} detail
+        close (dds/button "閉じる" {:type :text :size "sm"
+                                    :href (str "/"
+                                               (when-not (str/blank? (str q))
+                                                 (str "?q=" (url-encode q)))
+                                               (:fragment (view-by-id :items)))})]
+    (case status
+      :ok
+      (dds/card
+       [:div {:class "dds-ext-row kagi-detail-head"}
+        (dds/heading 3 (str (or (:item/title item) (:item/id item))) {:size "20"})
+        (when-let [c (:item/category item)] (dds/chip-label (name c) {:color "blue"}))
+        close]
+       [:p {:class "kagi-lede"}
+        [:span {:class "kagi-mono"} (str (:item/id item))]
+        (when-let [u (:item/username item)] (str " · " u))
+        (when-let [u (:item/url item)] (str " · " u))]
+       (when-let [notes (not-empty (str (:item/notes item)))]
+         [:p (str notes)])
+       (for [section (:item/sections item)]
+         [:div {:class "kagi-scroll"}
+          (dds/table
+           {:caption (str (or (:section/title section) "fields"))
+            :headers ["Field" "Type" "Value"]
+            :row-header? true
+            :rows (mapv field-row (:section/fields section))})])
+       (action-form {:action "/copy" :token token}
+                    (hidden "item" (:item/id item))
+                    (dds/button "Copy" {:type :solid-fill :size "sm" :submit? true})))
+
+      :raw
+      (dds/card
+       [:div {:class "dds-ext-row kagi-detail-head"}
+        (dds/heading 3 "素の secret" {:size "20"})
+        close]
+       [:p {:class "kagi-lede"}
+        "この item は kagitaba item ではなく、"
+        [:code "kagi add"] " で入れた素の値。構造が無いので見せられるものも無い —— "
+        "値は clipboard 経由でだけ取り出せる。"]
+       (action-form {:action "/copy" :token token}
+                    (hidden "item" (:item-id detail))
+                    (dds/button "Copy" {:type :solid-fill :size "sm" :submit? true})))
+
+      :denied
+      (dds/notification-banner {:type :error :heading "reveal を governor が拒否した"}
+                               [:p "この item は開けない。" close])
+
+      (dds/notification-banner {:type :error :heading "そんな item は無い"}
+                               [:p close]))))
+
 (defn items-view
   "The list screen. Metadata only — `kagi.vault-read/items` does not decrypt,
   and the Copy button does not put the value on this page either: the JVM
   reveals it through the governor and puts it on the clipboard."
-  [{:keys [items token clipboard-ttl-sec]}]
-  (list
-   [:p {:class "kagi-lede"}
-    "Copy は governor を通して復号し、値を " [:strong "この端末の clipboard"] " に置く。"
-    "ページにも socket にも平文は出ない。clipboard は "
-    [:strong (str clipboard-ttl-sec " 秒")] " 後に、内容が変わっていなければ消える。"]
-   (if (empty? items)
-     [:p {:class "kagi-empty"} "item がまだ無い。" [:code "kagi add <name>"] " で入れる。"]
-     [:div {:class "kagi-scroll"}
-      (dds/table
-       {:caption (str (count items) " items")
-        :headers ["Item" "Compartment" "Category" "Version" "Updated" ""]
-        :row-header? true
-        :rows (for [it items]
-                [[:span {:class "kagi-mono"} (str (:item/id it))]
-                 (str (or (:item/compartment it) "—"))
-                 (if-let [c (:item/category it)]
-                   (dds/chip-label (name c) {:color "gray"})
-                   "—")
-                 (str "v" (:item/version it))
-                 (str (or (:item/updated-at it) (:item/created-at it) "—"))
-                 (action-form {:action "/copy" :token token}
-                              (hidden "item" (:item/id it))
-                              (dds/button "Copy" {:type :outline :size "sm" :submit? true}))])})])))
+  [{:keys [items token clipboard-ttl-sec q detail] :as data}]
+  (let [shown (matching-items items q)
+        filtered? (not (str/blank? (str q)))]
+    (list
+     [:p {:class "kagi-lede"}
+      "Copy は governor を通して復号し、値を " [:strong "この端末の clipboard"] " に置く。"
+      "ページにも socket にも平文は出ない。clipboard は "
+      [:strong (str clipboard-ttl-sec " 秒")] " 後に、内容が変わっていなければ消える。"]
+     (search-form q)
+     (when detail (detail-card data))
+     (cond
+       (empty? items)
+       [:p {:class "kagi-empty"} "item がまだ無い。" [:code "kagi add <name>"] " で入れる。"]
+
+       ;; A filter that matches nothing is not an empty vault, and the two
+       ;; must not be drawn the same way.
+       (empty? shown)
+       [:p {:class "kagi-empty"}
+        (str "\"" q "\" に一致する item は無い（" (count items) " 件中 0 件）。")]
+
+       :else
+       [:div {:class "kagi-scroll"}
+        (dds/table
+         {:caption (if filtered?
+                     (str (count shown) " / " (count items) " items")
+                     (str (count items) " items"))
+          :headers ["Item" "Compartment" "Category" "Version" "Updated" ""]
+          :row-header? true
+          :rows (for [it shown]
+                  [[:a {:href (item-href (:item/id it) q) :class "kagi-mono"}
+                    (str (:item/id it))]
+                   (str (or (:item/compartment it) "—"))
+                   (if-let [c (:item/category it)]
+                     (dds/chip-label (name c) {:color "gray"})
+                     "—")
+                   (str "v" (:item/version it))
+                   (str (or (:item/updated-at it) (:item/created-at it) "—"))
+                   (action-form {:action "/copy" :token token}
+                                (hidden "item" (:item/id it))
+                                (dds/button "Copy" {:type :outline :size "sm" :submit? true}))])})]))))
 
 (defn- revoke-control
   "Revoking is one click away from an operator who meant to click the row.

@@ -119,6 +119,35 @@
     (is (empty? (vr/kagitaba-items s :contract-review))
         "kagitaba item でない平文は item として返さない")))
 
+;; ── 1 件を開く: 4 つの答えは 4 つとも別物 ───────────────────────────────────
+
+(deftest read-one-distinguishes-its-four-answers
+  (let [s (session)]
+    (seed! s "claude-pro" "personal" :membership (pr-str claude-item))
+    (seed! s "note" "personal" :api-credential "just a string, not an item")
+    (testing "kagitaba item は構造を返す。機微値は落ちるが field は残る"
+      (let [{:keys [status item]} (vr/read-one s "claude-pro" :contract-review)]
+        (is (= :ok status))
+        (is (= "Claude Pro" (:item/title item)))
+        (is (= "claude-pro" (:item/id item)))
+        (is (not (re-find #"hunter2" (pr-str item))))
+        (let [pw (->> (:item/sections item) (mapcat :section/fields)
+                      (filter #(= :concealed (:field/type %))) first)]
+          (is (true? (:field/redacted? pw)))
+          (is (nil? (:field/value pw))))))
+    (testing "素の secret は :raw。平文は返さない"
+      (let [r (vr/read-one s "note" :contract-review)]
+        (is (= :raw (:status r)))
+        (is (not (re-find #"just a string" (pr-str r)))
+            "raw の答えに平文が混ざってはいけない")))
+    (testing "governor の拒否は :denied で、:absent とも :raw とも別"
+      (is (= :denied (:status (vr/read-one s "claude-pro" nil)))))
+    (testing "無い item は :absent"
+      (is (= :absent (:status (vr/read-one s "no-such-item" :contract-review)))))
+    (testing "開いていない vault は :absent（:denied ではない）"
+      (is (= :absent (:status (vr/read-one (vr/open "/tmp/kagi-nonexistent-vault")
+                                           "claude-pro" :contract-review)))))))
+
 ;; ── 表示 ────────────────────────────────────────────────────────────────────
 
 (deftest home-path-is-redacted-for-display

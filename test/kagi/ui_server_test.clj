@@ -45,7 +45,12 @@
             {:ok? true :heading (str item " を clipboard にコピーした")})
    :revoke! (fn [device-id]
               (swap! log conj [:revoke! device-id])
-              {:ok? true :heading (str device-id " を revoke した")})})
+              {:ok? true :heading (str device-id " を revoke した")})
+   :detail (fn [item-id]
+             (swap! log conj [:detail item-id])
+             {:status :ok :item-id item-id
+              :item {:item/id item-id :item/title "Opened"
+                     :item/sections []}})})
 
 (defn- with-window [f]
   (let [log (atom [])
@@ -273,3 +278,32 @@
       "a longer name that starts the same is a different cookie")
   (is (nil? (ui-server/cookie-value "" "kagi_ui_session")))
   (is (nil? (ui-server/cookie-value nil "kagi_ui_session"))))
+
+;; ── drawing the list must not open anything ────────────────────────────────
+
+(deftest rendering-the-list-does-not-open-an-item
+  ;; Opening decrypts. If drawing the list called `:detail`, every visit to
+  ;; the window would decrypt something, and the ledger would fill with
+  ;; reveals nobody asked for.
+  (with-window
+    (fn [window log]
+      (send! "GET" (:origin window) (session window) nil)
+      (is (= [] @log) "drawing the list opened an item"))))
+
+(deftest naming-an-item-opens-exactly-that-one-exactly-once
+  (with-window
+    (fn [window log]
+      (let [res (send! "GET" (str (:origin window) "/?item=gh-token")
+                       (session window) nil)]
+        (is (= 200 (.statusCode res)))
+        (is (str/includes? (.body res) "Opened")))
+      (is (= [[:detail "gh-token"]] @log)))))
+
+(deftest a-search-narrows-the-rendered-list-and-opens-nothing
+  (with-window
+    (fn [window log]
+      (let [body (.body (send! "GET" (str (:origin window) "/?q=nothing-matches")
+                               (session window) nil))]
+        (is (str/includes? body "0 件"))
+        (is (not (str/includes? body "gh-token"))))
+      (is (= [] @log)))))

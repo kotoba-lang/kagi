@@ -191,6 +191,35 @@
                                 :item/compartment (:item/compartment meta))))))
            (filter pred (items session))))))
 
+(defn read-one
+  "1 item を governor 経由で読み、機微値を落として返す。**答えは 4 通りで、
+  どれも他の 3 つと区別できる**:
+
+    {:status :ok    :item <機微値を落とした kagitaba item>}
+    {:status :raw}                 ; 復号できたが kagitaba item ではない
+                                   ;   (`kagi add` で入れた素の secret)
+    {:status :denied}              ; governor が拒否した
+    {:status :absent}              ; そんな item は無い
+
+  `kagitaba-items` は 3 つ目と 4 つ目と 2 つ目をすべて「空の結果」に畳む——
+  一覧を作るには正しいが、1 件を開く画面には足りない。「拒否された」を
+  「そんな item は無い」と描くのも、「素の secret」を「空の item」と描くのも
+  嘘になる。
+
+  `:raw` は **平文を返さない**。素の secret に構造は無いので、見せられるものは
+  「これは素の secret である」という事実だけで、値そのものは clipboard 経路
+  （`kagi.ui.actions/actions` の `:copy!`）にしか流さない。"
+  [session item-id purpose]
+  (cond
+    (not= :open (:status session)) {:status :absent}
+    (not (store/item (:store session) item-id)) {:status :absent}
+    :else
+    (if-let [plaintext (reveal session item-id purpose)]
+      (if-let [item (parse-item plaintext)]
+        {:status :ok :item (-> item strip-sensitive (assoc :item/id item-id))}
+        {:status :raw})
+      {:status :denied})))
+
 (defn redact-home
   "表示用に vault path のホーム部分を伏せる。"
   [path]

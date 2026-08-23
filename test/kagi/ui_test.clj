@@ -107,3 +107,101 @@
     (is (not (str/includes? html "<script")))
     (is (not (re-find #"(?i)\son[a-z]+=" html))
         "an inline event handler is a script by another name")))
+
+;; ── search ─────────────────────────────────────────────────────────────────
+
+(deftest a-blank-query-shows-the-whole-vault
+  ;; The realistic wrong implementation is a short-circuit to `[]` for a blank
+  ;; query — "nothing was searched for, so nothing matches" — which empties
+  ;; the window for anyone who presses the button without typing.
+  (is (= 2 (count (ui/matching-items (:items sample) nil))))
+  (is (= 2 (count (ui/matching-items (:items sample) ""))))
+  (is (= 2 (count (ui/matching-items (:items sample) "   ")))
+      "whitespace submitted by an empty form must not empty the vault"))
+
+(deftest search-matches-the-three-things-the-row-shows
+  (let [ids #(mapv :item/id (ui/matching-items (:items sample) %))]
+    (is (= ["gh-token"] (ids "gh")) "id")
+    (is (= ["b2-key"] (ids "personal")) "compartment")
+    (is (= ["gh-token"] (ids "login")) "category")
+    (is (= ["gh-token"] (ids "GH-TOKEN")) "case-insensitive")
+    (is (= [] (ids "no-such-thing")))
+    (testing "and nothing else — a list screen does not open items, so a query
+              that could only match a secret's contents finds nothing"
+      (is (= [] (ids "correct-horse"))))))
+
+(deftest no-matches-is-not-an-empty-vault
+  (let [none (ui/document (assoc sample :q "zzzz"))
+        empty-vault (ui/document (assoc sample :items []))]
+    (is (str/includes? none "2 件中 0 件"))
+    (is (not (str/includes? none "kagi add"))
+        "a filter that matched nothing was drawn as an empty vault")
+    (is (str/includes? empty-vault "kagi add"))))
+
+(deftest a-filtered-list-says-how-much-it-is-hiding
+  (let [html (ui/document (assoc sample :q "gh"))]
+    (is (str/includes? html "1 / 2 items"))
+    (is (str/includes? html "gh-token"))
+    (is (not (str/includes? html "b2-key")))
+    (testing "and offers a way back to the whole list"
+      (is (str/includes? html "解除")))))
+
+;; ── detail ─────────────────────────────────────────────────────────────────
+
+(def ^:private opened-item
+  {:item/id "claude-pro" :item/category :membership :item/title "Claude Pro"
+   :item/username "jun@example.com" :item/url "https://claude.ai"
+   :item/sections
+   [{:section/title "Login"
+     :section/fields [{:field/id "username" :field/title "username"
+                       :field/type :string :field/value "jun@example.com"}
+                      {:field/id "password" :field/title "password"
+                       :field/type :concealed :field/value nil :field/redacted? true}]}]})
+
+(deftest an-opened-item-shows-its-shape-and-not-its-secrets
+  (let [html (ui/document (assoc sample :detail {:status :ok :item opened-item
+                                                 :item-id "claude-pro"}))]
+    (is (str/includes? html "Claude Pro"))
+    (is (str/includes? html "jun@example.com") "a non-sensitive field is shown")
+    (testing "a concealed field is present and marked SET — not missing, which
+              would read as 'no password'"
+      (is (str/includes? html "password"))
+      (is (str/includes? html "設定済み・伏せてある")))
+    (is (not (str/includes? html plaintext)))))
+
+(deftest a-concealed-value-that-somehow-survived-is-still-not-printed
+  ;; strip-sensitive drops the value upstream. If it ever stopped, this is the
+  ;; assertion that says so — the renderer is handed a field that IS marked
+  ;; redacted but still carries a value, and must print the marker, not it.
+  (let [leaky (assoc-in opened-item [:item/sections 0 :section/fields 1 :field/value]
+                        plaintext)
+        html (ui/document (assoc sample :detail {:status :ok :item leaky
+                                                 :item-id "claude-pro"}))]
+    (is (not (str/includes? html plaintext)))))
+
+(deftest the-four-answers-to-opening-an-item-are-drawn-as-four-things
+  (let [page #(ui/document (assoc sample :detail %))
+        ok (page {:status :ok :item opened-item :item-id "claude-pro"})
+        raw (page {:status :raw :item-id "note"})
+        denied (page {:status :denied :item-id "gh-token"})
+        absent (page {:status :absent :item-id "nope"})]
+    (is (str/includes? ok "Claude Pro"))
+    (is (str/includes? raw "素の secret"))
+    (is (str/includes? raw "value=\"note\"") "raw still offers Copy, for the right item")
+    (is (str/includes? denied "governor が拒否"))
+    (is (str/includes? absent "そんな item は無い"))
+    (testing "denied and absent are not the same screen"
+      (is (not (str/includes? denied "そんな item は無い")))
+      (is (not (str/includes? absent "governor が拒否"))))))
+
+(deftest opening-an-item-keeps-the-search-that-found-it
+  (is (= "/?item=gh-token&q=work#items" (ui/item-href "gh-token" "work")))
+  (is (= "/?item=gh-token#items" (ui/item-href "gh-token" "")))
+  (testing "and an id with a space or an ampersand stays one parameter"
+    (is (str/includes? (ui/item-href "a b" "") "item=a+b"))
+    (is (not (str/includes? (ui/item-href "a&b=c" "") "a&b=c"))))
+  (testing "closing it keeps the search too"
+    (is (str/includes? (ui/document (assoc sample :q "work"
+                                           :detail {:status :ok :item opened-item
+                                                    :item-id "claude-pro"}))
+                       "/?q=work#items"))))
