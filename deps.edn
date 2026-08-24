@@ -54,7 +54,14 @@
          :git/sha "9e65581af2e7d9869ceac13d2e1c508def4f9e45"}
         ;; Real memory-hard Argon2id. Deliberately a direct dependency: VMK
         ;; protection must never silently fall back to a cheap compatibility KDF.
-        org.bouncycastle/bcprov-jdk18on {:mvn/version "1.84"}}
+        org.bouncycastle/bcprov-jdk18on {:mvn/version "1.84"}
+        ;; The wallet signer seam kagi.chain-signer implements (Signer
+        ;; protocol + BIP-32/39 + secp256k1 arrive through wallet's OWN pins
+        ;; of btc-crypto/eth-crypto — one source of version truth for the
+        ;; crypto mechanism, ADR-2608241100).
+        io.github.kotoba-lang/wallet
+        {:git/url "https://github.com/kotoba-lang/wallet.git"
+         :git/sha "34efd0469192b6a67cc2c352b666d526fe2e21f1"}}
  :aliases
  {;; offline workspace dev — pin transitive langchain-clj to local checkout
   :dev {:override-deps
