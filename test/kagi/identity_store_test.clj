@@ -94,3 +94,26 @@
           (is (satisfies? crypto/SigningHandle (identity/sign-secret loaded)))
           (is (satisfies? crypto/DecapsulationHandle (identity/kem-secret loaded)))
           (is (nil? (:private-key loaded))))))))
+
+(deftest migrating-onto-an-occupied-secret-ref-is-refused
+  (testing "既に別の identity が入っている ref を、黙って上書きしない"
+    (let [store (ss/mem-secret-store)
+          ref "keychain://test-identity/occupied"
+          dir (str (java.nio.file.Files/createTempDirectory
+                    "kagi-identity-guard" (make-array java.nio.file.attribute.FileAttribute 0)))
+          path (str dir "/identity.edn")
+          first-id (identity/generate-identity)
+          second-id (identity/generate-identity)]
+      (identity/migrate-identity-secret! path first-id store ref)
+      (testing "同じ鍵の再実行は通る（冪等なリトライを詰まらせない）"
+        (is (map? (identity/migrate-identity-secret! path first-id store ref))))
+      (testing "別の鍵は拒否される"
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"refusing to overwrite the identity secret"
+             (identity/migrate-identity-secret! path second-id store ref))))
+      (testing "--replace? を明示すれば通る（鍵ローテーションはそう言う）"
+        (is (map? (identity/migrate-identity-secret! path second-id store ref
+                                                     {:replace? true}))))
+      (testing "拒否された時点で古い鍵は無傷だった"
+        (is (= (:private-b64 second-id)
+               (:private-b64 (ss/get-edn store ref))))))))

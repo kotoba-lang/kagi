@@ -247,8 +247,37 @@
 (defn migrate-identity-secret!
   "Move secret key material from an identity map into SecretStore.
 
-  Returns the public identity map that should be written to identity.edn."
-  [path id secret-store secret-ref]
+  Returns the public identity map that should be written to identity.edn.
+
+  REFUSES when the ref already holds an identity and `id` is a different one.
+  That guard exists because of a real loss: pointing `KAGI_IDENTITY_REF` at an
+  existing secret while the matching `identity.edn` was absent (a second
+  `$KAGI_HOME`, a fresh checkout, a server started with the wrong home) sent
+  this down the CREATE path, which generated a new identity and overwrote the
+  old private key. Nothing failed at the time. What failed was every later
+  operation, as `did:key` from the surviving `identity.edn` no longer matched
+  the key in the store — the CACAO self-verify in `kagi.operation`'s `authn`
+  node returns `verified? false` and every op is held, which reads as an
+  authorization problem rather than a destroyed key.
+
+  `kagi init` already refuses to clobber an existing VAULT for the same reason
+  (ADR-2607170500). The identity secret had no such guard; it does now.
+
+  `:replace? true` is the deliberate override — a rotation says so."
+  [path id secret-store secret-ref & [{:keys [replace?]}]]
+  (when-not replace?
+    (when-let [existing (try (secret-store/get-edn secret-store secret-ref)
+                             (catch Exception _ nil))]
+      (when (and (:private-b64 existing)
+                 (not= (:private-b64 existing) (:private-b64 id)))
+        (throw (ex-info (str "refusing to overwrite the identity secret already at "
+                             (secret-store/redact-ref secret-ref)
+                             " with a different key — the identity.edn that matches it is "
+                             "somewhere else. Point KAGI_HOME at that home, or pass a "
+                             "different KAGI_IDENTITY_REF.")
+                        {:kagi/rule :identity-secret-clobber
+                         :ref (secret-store/redact-ref secret-ref)
+                         :path path})))))
   (let [{:keys [public secret]} (split-identity id)
         base-public (-> public
                         ensure-key-metadata

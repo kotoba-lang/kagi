@@ -2,7 +2,7 @@
   "AccessGovernor — 知能ノードから独立した検閲器。proposal を受け取り verdict を返す。
   knowledge ノード(advisor)は本検査に一切の可視性を持たない。
 
-  hard violation(即 hold): RBAC / purpose / 最小開示 / consent。
+  hard violation(即 hold): RBAC / purpose / 最小開示 / consent / agent scope。
   soft escalation(人間承認へ): 低 confidence / 高価値(high-value) / 異常(anomaly)。
 
   単一不変条件: ここが ok? でない開示/書込/共有/鍵操作を operation は決して副作用に回さない。"
@@ -62,6 +62,46 @@
   (cond-> []
     (and (#{:share/grant} op) (not consent?))
     (conj {:rule :consent :detail "共有には対象者 consent が必要"})))
+
+(defn- agent-violations
+  "agent principal（人でない actor）だけに効く検査。
+
+  `context :agent` が無ければ何も足さない —— CLI の owner はこれまでどおり。
+  在る時は、その principal の **enrollment 時に決まった** scope を強制する:
+  何ができるか(`:agent/ops`)、いつまでか(`:agent/not-after`)、何のためか
+  (`:agent/purposes`)。RBAC の role とは別の軸で、role を広げずに絞る側にしか
+  効かない —— agent は owner の delegate であって、owner より強くはならない。
+
+  **時計が無ければ落とす。** `:agent/not-after` が在るのに `now` が無い context は
+  「期限を評価できなかった」であって「期限内だった」ではない。属性が欠けた時に
+  閉じる側へ倒すのは `abac-violations` の docstring が言っているのと同じ規律で、
+  ここで開く側へ倒すと、`now` を付け忘れた呼び出し側が期限を無効化できてしまう。"
+  [{:keys [op]} {:keys [agent purpose now]}]
+  (if-not agent
+    []
+    (let [{:agent/keys [id ops purposes not-after revoked-at]} agent]
+      (cond-> []
+        (some? revoked-at)
+        (conj {:rule :agent-revoked
+               :detail (str "agent " id " は " revoked-at " に失効させられている")})
+
+        (not (contains? (set ops) op))
+        (conj {:rule :agent-op
+               :detail (str "agent " id " に " op " は許可されていない（許可: "
+                            (pr-str (vec (sort (map str ops)))) "）")})
+
+        (and not-after (nil? now))
+        (conj {:rule :agent-clock
+               :detail "有効期限のある principal を、現在時刻の無い context で評価できない"})
+
+        (and not-after now (pos? (compare (str now) (str not-after))))
+        (conj {:rule :agent-expired
+               :detail (str "agent " id " の enrollment は " not-after " に失効している")})
+
+        (and (seq purposes) (not (contains? (set (map str purposes)) (str purpose))))
+        (conj {:rule :agent-purpose
+               :detail (str "agent " id " に purpose " (pr-str purpose)
+                            " は許可されていない（許可: " (pr-str (vec (sort (map str purposes)))) "）")})))))
 
 (defn- abac-violations
   "Evaluate subject/resource/action/environment attributes.  The policy is
@@ -128,6 +168,7 @@
                                (access-violations request context st)
                                (purpose-violations request context)
                                (consent-violations request context)
+                               (agent-violations request context)
                                (information-flow-violations request context proposal)
                                (abac-violations request context proposal (or policy {}))))
         conf (:confidence proposal 1.0)

@@ -35,6 +35,11 @@
             [kagi.identity :as identity]
             [kagi.persist :as persist]
             [kagi.device :as device]
+            [kagi.agent :as agent]
+            [kagi.agent-docs :as agent-docs]
+            [kagi.agent-http :as agent-http]
+            [kagi.agent-protocol :as agent-proto]
+            [kagi.agent-service :as agent-service]
             [kagi.secret-store :as secret-store]
             [kagi.clipboard :as clipboard]
             [kagi.autofill :as autofill]
@@ -149,7 +154,12 @@
 
 (defn- save-store! [st meta]
   (let [a @(:a st)]
-    (persist/save! vault-path (assoc (select-keys a [:members :items :grants :blocks :ledger])
+    ;; `:rotation-events` was missing here, so every event `store/commit-rekey!`
+    ;; minted (rotation and `:share/revoke`) was written into the in-memory
+    ;; store and then dropped on the way to disk — the item kept pointing at an
+    ;; `:item/rotation-event` id that nothing resolved.
+    (persist/save! vault-path (assoc (select-keys a [:members :items :grants :blocks
+                                                     :ledger :rotation-events])
                                      :meta meta))))
 
 (defn- self-cacao [id]
@@ -158,7 +168,12 @@
                :issued-at (str (Instant/now)) :expiry (str (.plusSeconds (Instant/now) 3600))}))
 
 (defn- context [id vmk purpose]
+  ;; `:now` is not decoration: `do-effect` stamps `:item/key-created-at` with
+  ;; it (it was nil for every item this CLI ever wrote), and
+  ;; `key-registry/authorize!` fails closed without a current time, which is
+  ;; what `:share/grant` needs to check a recipient's KEM key lifecycle.
   {:did (:did id) :role :owner :phase 3 :vmk vmk :purpose purpose
+   :now (str (Instant/now))
    :aud aud :cacao (self-cacao id) :register (identity/member-record id :owner)})
 
 (defn- run-op! [p id store vmk req purpose]
@@ -166,9 +181,35 @@
     (:state (g/run* actor {:request req :context (context id vmk purpose)}
                     {:thread-id (str (:op req) "-" (:item-id req) "-" (UUID/randomUUID))}))))
 
+(defn- run-op-with!
+  "`run-op!` plus two things the sharing commands need.
+
+  `extra` merges into the context (`:consent?` for `:share/grant` — the owner
+  typing the command IS the consent the governor asks for).
+
+  `:signer-key` is passed to `op/build` because `:effect` REFUSES to re-key
+  without one, and `:share/revoke` re-keys. Note this is scoped to these
+  commands on purpose: `run-op!` still omits it, so `kagi rotate` still throws
+  `rotation requires an active managed authority signer` — a pre-existing gap
+  reported in ADR-2608281100 rather than quietly widened here, since passing a
+  key makes `key-registry/authorize!` run on EVERY ledger entry and that is a
+  change to commands this work has no business touching."
+  [p id store vmk req purpose extra]
+  (let [actor (op/build store {:crypto p
+                               :signer (identity/sign-secret id)
+                               :signer-key (:signing-key id)})]
+    (:state (g/run* actor {:request req :context (merge (context id vmk purpose) extra)}
+                    {:thread-id (str (:op req) "-" (:item-id req) "-" (UUID/randomUUID))}))))
+
 ;; ───────── opts ─────────
 
 (defn- arg-val [args flag] (->> args (drop-while #(not= flag %)) second))
+(defn- arg-vals
+  "Every value of a flag that may repeat (`--compartment a --compartment b`).
+  `arg-val` returns the first and silently loses the rest, which for a scope
+  flag would mean granting less than the operator asked for without saying so."
+  [args flag]
+  (->> args (partition 2 1) (keep (fn [[a b]] (when (= flag a) b))) vec))
 (defn- positional [args] (remove #(str/starts-with? % "-") (rest args)))
 (defn- parse-long* [s default]
   (if (str/blank? (str s))
@@ -177,6 +218,46 @@
       (Long/parseLong (str s))
       (catch NumberFormatException _
         (die "expected integer, got:" s)))))
+
+(defn- object-backend
+  "The object-store wiring, or nil when it is not configured.
+
+  `requiring-resolve` rather than a top-level require: io-storj is an extra-dep
+  of the `:cli` and `:test` aliases, not of the library, so `kagi.cli` has to
+  stay loadable without it. You need the wiring dependency when you use the
+  wiring — see `kagi.object-store`'s ns docstring."
+  []
+  (try
+    ((requiring-resolve 'kagi.object-store/from-env)
+     {:prefix (not-empty (System/getenv "KAGI_OBJECT_PREFIX"))})
+    (catch java.io.FileNotFoundException _
+      (die (str "object backend needs io-storj on the classpath — run through "
+                "bin/kagi (the :cli alias carries it)")))))
+
+(defn- sync-backend
+  "Which backend `push`/`pull`/`sync` use.
+
+  Explicit `--backend` wins, then `KAGI_SYNC_BACKEND`, then: the object store
+  if it is configured, otherwise kotobase. Auto-selecting on configuration is
+  the useful default — nobody sets four bucket variables by accident — and the
+  chosen backend is echoed in every command's output so it is never a guess.
+
+  NOTE (2026-08-28): the kotobase backend currently answers 401 for every call.
+  The graph-database runs with `KOTOBASE_BISCUIT_AUTH_MODE=required` and
+  refuses any non-Biscuit Authorization before the CACAO branch is reached; the
+  CACAO this repo mints is correct (ADR-2608281200). That is why the object
+  backend exists, and why it is preferred when configured."
+  [args]
+  (let [asked (or (not-empty (arg-val args "--backend"))
+                  (not-empty (System/getenv "KAGI_SYNC_BACKEND")))]
+    (case (or asked "auto")
+      "kotobase" {:backend :kotobase}
+      "object" (or (some-> (object-backend) (assoc :backend :object))
+                   (die (str "object backend is not configured. 必要な環境変数:\n"
+                             @(requiring-resolve 'kagi.object-store/env-help))))
+      "auto" (or (some-> (object-backend) (assoc :backend :object))
+                 {:backend :kotobase})
+      (die "usage: --backend kotobase|object"))))
 
 ;; ───────── commands ─────────
 
@@ -534,6 +615,334 @@
                                 取り消すものではない。紛失端末は vault 侵害として扱い、
                                 secret 自体を rotate すること"}))))
 
+
+;; ───────── agent principals ─────────
+;;
+;; The verbs mirror `device` (request → approve) because it is the same
+;; problem with a different second party, and an operator who learned one
+;; should not have to learn the other. What differs is what gets handed over:
+;; a device grant carries the VMK, an agent approval carries nothing at all.
+;; The agent's reach is built afterwards, one `kagi agent grant <id> <item>`
+;; at a time, which is why revoking it can actually re-key.
+
+(defn- agent-store
+  "Where the agent commands read and write principals.
+
+  Local files by default; the object store with `--backend object`, so the
+  same commands manage a registry that a server elsewhere is serving. Without
+  this, `kagi agent invite` would mint an invite into a registry the bucket-
+  served API never reads — an invite that exists and cannot be used.
+
+  Separate from `vault.edn` either way (`kagi.agent`'s ns docstring says why):
+  enrolling a principal must not rewrite a 9.5 MB snapshot, and must not be
+  erased by the owner's next `kagi push`."
+  [id args]
+  (let [backend (sync-backend args)]
+    (if (= :object (:backend backend))
+      (agent-docs/object-docs {:fns (:fns backend)
+                               :did (or (not-empty (arg-val args "--did"))
+                                        (not-empty (System/getenv "KAGI_AGENT_TENANT_DID"))
+                                        (:did id))
+                               :prefix (not-empty (System/getenv "KAGI_OBJECT_PREFIX"))})
+      (agent-docs/local-docs dir))))
+
+(defn- agent-registry [id args] ((:registry (agent-store id args))))
+
+(defn- parse-ops
+  "`reveal,list` or `item/reveal,share/grant`. Unknown names die rather than
+  being dropped: a typo'd capability that silently disappears grants less than
+  the operator believes they granted, and they will find out from a failure
+  weeks later."
+  [s]
+  (when s
+    (let [ops (into #{} (map (fn [t] (if (str/includes? t "/") (keyword t) (keyword "item" t)))
+                             (remove str/blank? (str/split s #","))))]
+      (when-let [unknown (seq (remove agent-proto/ops ops))]
+        (die (str "unknown --ops: " (pr-str (vec unknown))
+                  "\n  known: " (pr-str (vec (sort (map (comp str symbol) agent-proto/ops)))))))
+      ops)))
+
+(defn- agent-scope [args]
+  {:compartments (set (arg-vals args "--compartment"))
+   :ops (or (parse-ops (arg-val args "--ops")) agent-proto/default-ops)
+   :purposes (set (arg-vals args "--purpose"))
+   :agent-ttl-sec (* 86400 (parse-long* (arg-val args "--ttl-days") 30))})
+
+(defn- cmd-agent-request
+  "On the AGENT's machine. Generates this principal's own keypair, keeps the
+  private half in a SecretStore, and prints the request plus the FINGERPRINT
+  to read aloud. No vault is needed here."
+  [p args]
+  (let [custody (if (= "file" (arg-val args "--custody")) :file :keychain)
+        {:keys [request fingerprint secret-ref]}
+        (agent/make-request! p {:label (arg-val args "--label") :custody custody :home dir})
+        out (or (arg-val args "--out") "agent-request.edn")]
+    (spit out (pr-str request))
+    (println (pr-str {:ok? true :wrote out
+                      :agent-id (:agent/id request)
+                      :did (:agent/did request)
+                      :fingerprint fingerprint
+                      :secret-ref secret-ref
+                      :secret? false
+                      :next (str "vault 側で: kagi agent approve " out
+                                 " --fingerprint " fingerprint
+                                 " --compartment <名前>")}))))
+
+(defn- cmd-agent-approve
+  "On the OWNER's machine. Registers the principal and prints its account_key
+  ONCE. `--fingerprint` is required for the same reason `kagi device grant`
+  requires it: it is the only thing that catches a substituted public key."
+  [p id args]
+  (let [file (or (nth args 2 nil)
+                 (die "usage: kagi agent approve <agent-request.edn> --fingerprint FP [--compartment C]... [--ops reveal,list] [--ttl-days 30]"))
+        request (edn/read-string (slurp file))
+        confirmed (or (arg-val args "--fingerprint")
+                      (die "--fingerprint は必須。agent が表示した値を読み上げて渡すこと —
+                            省くと攻撃者の公開鍵を登録しても気付けない"))
+        scope (agent-scope args)
+        _ (or (persist/load* vault-path) (die "no vault — run: kagi init"))
+        store* (agent-store id args)           ; migrates a legacy registry once
+        invite (merge #:invite{:id (str "direct:" (java.util.UUID/randomUUID))}
+                      {:invite/compartments (:compartments scope)
+                       :invite/ops (:ops scope)
+                       :invite/purposes (:purposes scope)
+                       :invite/agent-ttl-sec (:agent-ttl-sec scope)})
+        {:keys [token principal]}
+        (try (agent/approve p request {:invite invite :confirmed-fingerprint confirmed})
+             (catch clojure.lang.ExceptionInfo e
+               (die (str "agent approval refused: " (pr-str (:agent/errors (ex-data e)))))))]
+    ;; The vault is not touched. The member record `:share/grant` needs is
+    ;; derived from the principal at grant time (`kagi.agent/member-of`).
+    ((:update-registry! store*) #(agent/register % principal))
+    (println (pr-str {:ok? true
+                      :agent-id (:agent/id principal)
+                      :did (:agent/did principal)
+                      :ops (vec (sort (map (comp str symbol) (:agent/ops principal))))
+                      :compartments (vec (sort (:agent/compartments principal)))
+                      :not-after (:agent/not-after principal)
+                      :account-key token
+                      :note "account_key はこれ以降取り出せない(vault はハッシュしか持たない)。
+                             まだ何も読めない — kagi agent grant <agent-id> <item> で item を渡すこと"}))))
+
+(defn- cmd-agent-invite
+  "Mint an invite for the SELF-SERVICE path (`kagi agent serve`). The scope is
+  decided here, before any agent asks for it."
+  [p id args]
+  (let [scope (agent-scope args)
+        _ (or (persist/load* vault-path) (die "no vault — run: kagi init"))
+        store* (agent-store id args)
+        {:keys [secret record]}
+        (agent/mint-invite p (assoc scope
+                                    :ttl-sec (parse-long* (arg-val args "--ttl") 900)
+                                    :uses (parse-long* (arg-val args "--uses") 1)
+                                    :note (arg-val args "--note")))]
+    ((:update-registry! store*) #(agent/add-invite % record))
+    (println (pr-str {:ok? true
+                      :invite secret
+                      :invite-id (:invite/id record)
+                      :ops (vec (sort (map (comp str symbol) (:invite/ops record))))
+                      :compartments (vec (sort (:invite/compartments record)))
+                      :uses (:invite/uses-left record)
+                      :expires-at (:invite/expires-at record)
+                      :note "invite は一度しか表示されない(vault はハッシュしか持たない)"}))))
+
+(defn- cmd-agent-ls [_p id args]
+  (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))
+        st (load-store (dissoc data :meta))]
+    (println (pr-str (assoc (agent/status (agent-registry id args) st)
+                            :store (agent-docs/describe (agent-store id args)))))))
+
+(defn- principal-or-die [registry agent-id]
+  (or (agent/principal registry agent-id)
+      (die (str "no such agent principal: " agent-id
+                "\n  kagi agent ls で登録済みの principal を確認すること"))))
+
+(defn- refusal-detail
+  "Why an op did not commit, in a form an operator can act on.
+
+  `(:basis (last policy-holds))` alone answers nil whenever the run never
+  reached the governor — an `authn` failure routes straight to `:hold` with no
+  verdict — and \"grant refused: nil\" is exactly the refusal that cannot say
+  what refused it. Report the disposition and the audit trail too."
+  [state]
+  {:disposition (:disposition state)
+   :basis (:basis (last (filter #(= :policy-hold (:t %)) (:audit state))))
+   :audit (mapv #(select-keys % [:t :verified? :actor :op :basis :phase-reason]) (:audit state))
+   :effect (get-in state [:result :effect])})
+
+(defn- cmd-agent-grant
+  "Share one item with a principal. This is `:share/grant`: the item's DEK is
+  encapsulated to the agent's hybrid public key, so the agent can open THIS
+  item and learns nothing about any other."
+  [p id args]
+  (let [agent-id (or (nth args 2 nil) (die "usage: kagi agent grant <agent-id> <item>"))
+        item (or (nth args 3 nil) (die "usage: kagi agent grant <agent-id> <item>"))
+        prin (principal-or-die (agent-registry id args) agent-id)]
+    (with-vault p
+      (fn [st vmk]
+        ;; The member record is materialised from the principal HERE, in the
+        ;; owner's own vault write. Keeping it out of the registry means one
+        ;; fact in one place; keeping it out of the server means enrollment
+        ;; never has to touch the snapshot.
+        (store/put-member! st (agent/member-of prin))
+        (let [it (or (store/item st item) (die "no such item:" item))]
+          (when (and (seq (:agent/compartments prin))
+                     (not (contains? (set (:agent/compartments prin)) (:item/compartment it))))
+            ;; The declared scope is checked BEFORE the grant, not only when
+            ;; the item is released: a grant that exists but is refused at read
+            ;; time reads as a working share in `kagi agent ls`.
+            (die (str "item " item " は compartment " (pr-str (:item/compartment it))
+                      " にあり、principal の scope "
+                      (pr-str (vec (sort (:agent/compartments prin)))) " の外にある")))
+          (let [state (run-op-with! p id st vmk
+                                    {:op :share/grant :item-id item
+                                     :recipient-did (:agent/did prin)}
+                                    :cli-agent-grant
+                                    ;; The operator typing this command is the
+                                    ;; consent `governor/consent-violations`
+                                    ;; asks for.
+                                    {:consent? true})]
+            (if (= :shared (get-in state [:result :effect]))
+              (println (pr-str {:ok? true :granted item :to agent-id
+                                :did (:agent/did prin)}))
+              (die (str "grant refused: " (pr-str (refusal-detail state))))))))) ))
+
+(defn- cmd-agent-ungrant
+  "Un-share one item — `:share/revoke`, which RE-KEYS the item and
+  re-encapsulates it to every remaining recipient. This is the revocation that
+  actually closes the door: the principal's old envelope opens a DEK that no
+  longer decrypts anything."
+  [p id args]
+  (let [agent-id (or (nth args 2 nil) (die "usage: kagi agent ungrant <agent-id> <item>"))
+        item (or (nth args 3 nil) (die "usage: kagi agent ungrant <agent-id> <item>"))
+        prin (principal-or-die (agent-registry id args) agent-id)]
+    (with-vault p
+      (fn [st vmk]
+        (when-not (store/item st item) (die "no such item:" item))
+        (let [state (run-op-with! p id st vmk
+                                  {:op :share/revoke :item-id item
+                                   :recipient-did (:agent/did prin)}
+                                  :cli-agent-ungrant {})]
+          (if-let [v (get-in state [:result :version])]
+            (println (pr-str {:ok? true :ungranted item :from agent-id :item-version v
+                              :note "item は再鍵された。残りの受信者には新しい envelope が配られている"}))
+            (die (str "ungrant refused: " (pr-str (refusal-detail state))))))))))
+
+(defn- cmd-agent-revoke [_p id args]
+  (let [agent-id (or (nth args 2 nil) (die "usage: kagi agent revoke <agent-id>"))
+        data (or (persist/load* vault-path) (die "no vault — run: kagi init"))
+        store* (agent-store id args)
+        prin (principal-or-die ((:registry store*)) agent-id)
+        registry ((:update-registry! store*) #(agent/revoke-agent % agent-id nil))
+        st (load-store (dissoc data :meta))
+        held (get-in (agent/status registry st) [:agents])
+        grants (:agent/grants (first (filter #(= agent-id (:agent/id %)) held)))]
+    (println (pr-str {:ok? true :revoked agent-id :did (:agent/did prin)
+                      :token :dead
+                      :outstanding-grants (vec grants)
+                      :next (if (seq grants)
+                              (str "まだ開ける item がある。閉じるには: "
+                                   (str/join "; " (map #(str "kagi agent ungrant " agent-id " " %)
+                                                       grants)))
+                              "残っている grant は無い")}))))
+
+(defn- cmd-agent-serve
+  "Run the self-service API. Loopback unless `--host` says otherwise; this
+  process never holds a VMK, so what it serves is ciphertext.
+
+  `--backend object` serves the vault and registry out of the object store
+  instead of this machine's files, which is what lets the API run somewhere
+  the vault is not. It needs `--did` (or `KAGI_AGENT_TENANT_DID`) because a
+  bucket can hold many vaults and the server is not one of them — it does not
+  hold an identity to derive the tenant from."
+  [id args]
+  (let [backend (sync-backend args)
+        tenant (or (not-empty (arg-val args "--did"))
+                   (not-empty (System/getenv "KAGI_AGENT_TENANT_DID"))
+                   (:did id))
+        svc (agent-service/service
+             (if (= :object (:backend backend))
+               (agent-docs/object-docs {:fns (:fns backend) :did tenant
+                                        :prefix (not-empty (System/getenv "KAGI_OBJECT_PREFIX"))})
+               dir))
+        host (or (arg-val args "--host") "127.0.0.1")
+        port (parse-long* (arg-val args "--port") 0)
+        {:keys [origin base-url warning stop]}
+        (agent-http/start! svc {:host host :port port :tenant tenant})]
+    (println (pr-str (cond-> {:ok? true :listening origin
+                              ;; the URL an agent is actually given: every route
+                              ;; names its tenant
+                              :base-url base-url
+                              :tenant tenant
+                              :endpoints ["POST <base>/agents/challenges" "POST <base>/agents"
+                                          "GET <base>/whoami" "GET <base>/items"
+                                          "GET <base>/items/<id>/sealed" "POST <base>/audit"]
+                              :store (agent-docs/describe svc)}
+                       (:bucket backend) (assoc :bucket (:bucket backend)
+                                                :endpoint (:endpoint backend))
+                       warning (assoc :warning warning))))
+    (println "Ctrl-C で停止")
+    (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable stop))
+    @(promise)))
+
+(defn- cmd-agent-log
+  "Verify one principal's own signed chain against the public key the VAULT
+  recorded for it."
+  [id args]
+  (let [agent-id (or (nth args 2 nil) (die "usage: kagi agent log <agent-id>"))
+        r (agent/verify-ledger dir agent-id (agent-registry id args))]
+    (doseq [e (:ledger (persist/load* (agent/ledger-path dir agent-id)))]
+      (println (format "%3d  %-14s %-14s %s" (:ledger/seq e) (name (or (:t e) "?"))
+                       (str (:op e)) (or (:disposition e) ""))))
+    (println (pr-str r))))
+
+(defn- cmd-agent-audit
+  "What a REMOTE agent submitted about itself.
+
+  Distinct from `kagi agent log`, which reads the chain a LOCAL agent wrote
+  next to the vault. Over HTTP there is no governor run and no vault-side
+  ledger — the server releases ciphertext and the SDK decrypts — so the record
+  of what was opened exists only because the client signed one and handed it
+  back. Verified here against the public key the registry recorded at
+  enrollment, never against one the submission supplies."
+  [p id args]
+  (let [agent-id (or (nth args 2 nil) (die "usage: kagi agent audit <agent-id>"))
+        store* (agent-store id args)
+        prin (principal-or-die ((:registry store*)) agent-id)
+        submitted (:ledger ((:read-audit store*) agent-id))
+        pub (some-> (:agent/sign-pub prin) identity/decode-bundle)]
+    (if (empty? submitted)
+      (println (pr-str {:ok? true :entries 0
+                        :note "この principal はまだ何も提出していない（local agent なら kagi agent log）"}))
+      (do
+        (doseq [e submitted]
+          (println (format "%3d  %-10s %-24s %s"
+                           (:ledger/seq e) (name (or (:t e) "?"))
+                           (str (:item e)) (str (:purpose e)))))
+        (println (pr-str (assoc (ledger/verify-chain submitted p
+                                                     (fn [did] (when (= did (:agent/did prin)) pub)))
+                                :entries (count submitted)
+                                :received-at (:received-at ((:read-audit store*) agent-id)))))))))
+
+(defn- cmd-agent-get
+  "On the AGENT's machine. Opens one granted item with THIS principal's own
+  key — no VMK, no prompt, no passphrase. The four outcomes stay apart so a
+  refusal cannot be read as an empty secret."
+  [args]
+  (let [item (or (nth args 2 nil) (die "usage: kagi agent get <item> --purpose <用途>"))
+        purpose (or (arg-val args "--purpose")
+                    (die "--purpose は必須 — なぜ開けたのかが台帳に残らない開示は後から検証できない"))
+        session (agent/open {:home dir :agent-id (arg-val args "--agent")})]
+    (case (:status session)
+      :open (let [r (agent/read-one session item purpose)]
+              (case (:status r)
+                :ok (println (:plaintext r))
+                :denied (die (str "governor refused: " (pr-str (:basis r))))
+                :absent (die (str "no such item: " item))
+                (die (pr-str r))))
+      (die (pr-str (select-keys session [:status :hint :vault-home :agent-id
+                                         :revoked-at :not-after]))))))
+
 (defn- cmd-unlock-status []
   (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))]
     (println (pr-str (unlock/status (:meta data))))))
@@ -645,25 +1054,45 @@
 
 ;; ───────── cloud sync (kotobase.net) ─────────
 
+(defn- push-with [backend id args expected-seq]
+  (if (= :object (:backend backend))
+    (sync/object-push! {:fns (:fns backend) :did (:did id) :vault-path vault-path
+                        :prefix (not-empty (System/getenv "KAGI_OBJECT_PREFIX"))
+                        :expected-seq expected-seq})
+    (sync/push! {:id id :vault-path vault-path :pod (not-empty (arg-val args "--pod"))
+                 :expected-seq expected-seq})))
+
+(defn- pull-with [backend id args]
+  (if (= :object (:backend backend))
+    (sync/object-pull! {:fns (:fns backend) :did (:did id) :vault-path vault-path
+                        :prefix (not-empty (System/getenv "KAGI_OBJECT_PREFIX"))})
+    (sync/pull! {:id id :vault-path vault-path :pod (not-empty (arg-val args "--pod"))})))
+
+(defn- backend-report [backend]
+  (cond-> {:backend (:backend backend)}
+    (:bucket backend) (assoc :bucket (:bucket backend) :endpoint (:endpoint backend))))
+
 (defn- cmd-push [id args]
   (when-not (persist/load* vault-path) (die "no vault — run: kagi init"))
-  (let [pod (not-empty (arg-val args "--pod"))
-        r (sync/push! {:id id :vault-path vault-path :pod pod})]
-    (println (pr-str (assoc r :ok? true :secret? false)))))
+  (let [backend (sync-backend args)
+        r (push-with backend id args nil)]
+    (println (pr-str (merge r (backend-report backend) {:ok? true :secret? false})))))
 
 (defn- cmd-pull [id args]
-  (let [pod (not-empty (arg-val args "--pod"))
-        r (sync/pull! {:id id :vault-path vault-path :pod pod})]
+  (let [backend (sync-backend args)
+        r (pull-with backend id args)]
     (if (:seq r)
-      (println (pr-str (assoc r :ok? true :backup (str vault-path ".bak") :secret? false)))
-      (die "cloud has no vault snapshot for this graph yet — run: kagi push"))))
+      (println (pr-str (merge r (backend-report backend)
+                              {:ok? true :backup (str vault-path ".bak") :secret? false})))
+      (die "cloud has no vault snapshot for this vault yet — run: kagi push"))))
 
 (defn- cmd-sync [id args]
-  (let [pod (not-empty (arg-val args "--pod"))
-        pulled (sync/pull! {:id id :vault-path vault-path :pod pod})
-        pushed (sync/push! {:id id :vault-path vault-path :pod pod
-                            :expected-seq (or (:seq pulled) 0)})]
-    (println (pr-str {:ok? true :pulled (:seq pulled) :pushed (:seq pushed) :secret? false}))))
+  (let [backend (sync-backend args)
+        pulled (pull-with backend id args)
+        pushed (push-with backend id args (or (:seq pulled) 0))]
+    (println (pr-str (merge (backend-report backend)
+                            {:ok? true :pulled (:seq pulled) :pushed (:seq pushed)
+                             :secret? false})))))
 
 (defn- help []
   (println (str/trim "
@@ -699,7 +1128,22 @@ kagi — 自己主権・対量子(PQC) secrets vault (op 相当)
   kagi recovery create --out DIR [--threshold 3] [--shares 5]
   kagi recovery verify <share.edn>...
   kagi recovery get <item> <share.edn>...
-  kagi push [--pod URL]     暗号化 vault を kotobase.net へ同期(cloud 永続化)
+  kagi agent request --label <名前> [--custody file]
+                            agent 側: 自分の鍵を作り request と fingerprint を出す
+  kagi agent approve <request.edn> --fingerprint FP [--compartment C]... [--ops reveal,list] [--ttl-days 30]
+                            owner 側: principal を登録し account_key を1度だけ表示
+  kagi agent invite [--compartment C]... [--ops ...] [--ttl 900] [--uses 1]
+                            self-service 経路(kagi agent serve)用の招待を発行
+  kagi agent grant <agent-id> <item>      item を 1 件その agent に共有(:share/grant)
+  kagi agent ungrant <agent-id> <item>    共有を取り消し item を再鍵(:share/revoke)
+  kagi agent ls / revoke <agent-id> / log <agent-id> / audit <agent-id>
+                            log は local agent 自身の鎖、audit は remote agent が提出した鎖
+  kagi agent serve [--host H] [--port P] [--backend object --did <tenant did>]
+                            agent 向け HTTP API(VMK を持たない)。object backend なら
+                            vault ファイルの無いホストでも動く
+  kagi agent get <item> --purpose <用途>  agent 側: 自分の鍵で 1 件開く(対話なし)
+  kagi push [--backend object|kotobase] [--pod URL]
+                            暗号化 vault を cloud へ同期(object store / kotobase.net)
   kagi pull [--pod URL]     cloud の vault を取得(現ローカルは .bak に退避)
   kagi sync [--pod URL]     pull(あれば)→ push。iCloud Keychain 型 E2E 同期
 
@@ -762,6 +1206,19 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
                    "ls"      (cmd-device-ls p)
                    "revoke"  (cmd-device-revoke p args)
                    (die "usage: kagi device request|grant|accept|ls|revoke ..."))
+        "agent"  (case (second args)
+                   "request" (cmd-agent-request p args)
+                   "approve" (cmd-agent-approve p id args)
+                   "invite"  (cmd-agent-invite p id args)
+                   "ls"      (cmd-agent-ls p id args)
+                   "grant"   (cmd-agent-grant p id args)
+                   "ungrant" (cmd-agent-ungrant p id args)
+                   "revoke"  (cmd-agent-revoke p id args)
+                   "serve"   (cmd-agent-serve id args)
+                   "log"     (cmd-agent-log id args)
+                   "audit"   (cmd-agent-audit p id args)
+                   "get"     (cmd-agent-get args)
+                   (die "usage: kagi agent request|approve|invite|ls|grant|ungrant|revoke|serve|log|audit|get ..."))
         "unlock-enable-passkey" (cmd-unlock-enable-passkey p)
         "recovery" (case (second args)
                      "create" (cmd-recovery-create p args)
