@@ -70,7 +70,13 @@
   ;; clojure -M:dev:run  → drive the demo ops through one VaultActor
   :run {:main-opts ["-m" "kagi.sim"]}
   ;; clojure -M:dev:cli <cmd>  → op 相当の CLI(vault は ./.kagi)。bin/kagi も参照。
-  :cli {:main-opts ["-m" "kagi.cli"]}
+  ;; `kagi push --backend object` wires an S3-compatible object store, so the
+  ;; CLI — the application doing the wiring — carries io-storj. The LIBRARY
+  ;; still does not: `kagi.store` / `kagi.sync` take four functions and never
+  ;; learn whose bucket it is (see kagi.object-store's ns docstring).
+  :cli {:main-opts ["-m" "kagi.cli"]
+        :extra-deps {io.github.kotoba-lang/io-storj
+                     {:git/sha "daa038ba72fd515452d0f4091298568755a39ec9"}}}
   :witness {:main-opts ["-m" "kagi.witness-main"]}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner

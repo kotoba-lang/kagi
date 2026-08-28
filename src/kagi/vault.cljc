@@ -4,7 +4,8 @@
     - item     : title(任意暗号化) + 暗号文 blob の CID + nonce + version
     - wrap     : owner 用 DEK wrap(VMK 由来 KEK)
     - grant    : 共有先 hybrid 公開鍵への DEK encapsulate(PQC)
-    - ledger   : append-only ハッシュ鎖 + hybrid 署名(改竄検知)")
+    - ledger   : append-only ハッシュ鎖 + hybrid 署名(改竄検知)"
+  (:require [kagi.crypto :as crypto]))
 
 (def schema
   {:item/id          {:db/unique :db.unique/identity}
@@ -51,6 +52,10 @@
   #{:item/reveal :item/list})
 
 (defn item-aad
-  "AEAD の AAD には item-cid を縛り、ブロックの取り違え/差し替えを検知。"
-  ^bytes [item-id]
-  (.getBytes (str "kagi/item/" item-id) "UTF-8"))
+  "AEAD の AAD には item-cid を縛り、ブロックの取り違え/差し替えを検知。
+
+  `crypto/utf8-bytes` 経由なのは移植性のため —— この ns は `.cljc` だが、
+  `.getBytes` を直に呼んでいたので ClojureScript から読むと壊れていた。
+  `kagi.agent-client` はブラウザ/nbb 側でも同じ AAD を組み立てる必要がある。"
+  [item-id]
+  (crypto/utf8-bytes (str "kagi/item/" item-id)))

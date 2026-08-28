@@ -146,6 +146,8 @@ bin/kagi unlock-enable-passkey        # one-shot loopback bridgeでPasskey PRF�
 bin/kagi recovery create --out <dir> --threshold 3 --shares 5
 bin/kagi recovery verify <share.edn>...
 bin/kagi recovery get <item> <share.edn>...
+bin/kagi agent request|approve|invite|ls|grant|ungrant|revoke|serve|log|get
+                                      # 人でない principal（下記「人でない principal」）
 bin/kagi push                         # 暗号化済み vault snapshot を kotobase.net へ upsert
 bin/kagi pull                         # cloud の最新 snapshot を取得（local .bak を先に取る）
 bin/kagi sync                         # pull後のremote seq一致時だけpush（競合はfail-closed）
@@ -163,6 +165,193 @@ bin/kagi sync                         # pull後のremote seq一致時だけpush�
     ローテーションする羽目になった実例、ADR-2607170500 — の再発防止）。旧 `./.kagi/`
     （repo-local）しか無い環境では初回アクセス時に自動で home へ移行する。
 - `op` 対応: `op item get` → `kagi get` / `op item create` → `kagi add` / `op item list` → `kagi ls`。
+
+## 人でない principal（`kagi agent`、ADR-2608281100）
+
+`kagi get` はプロンプトを出し、`kagi device grant` は人が読み上げた fingerprint を
+要求し、`kagi ui` はブラウザを開く。**常駐 agent にはそのどれも無い** —— launchd 下
+では Keychain が prompt を出せずに timeout するので、実際には agent は
+`~/.gftd/<name>` の mode-600 平文を読んでいた。vault の外、governor の外、台帳の外。
+
+agent principal はその答えで、**「人抜きで vault を開ける」ではない**。
+
+```text
+owner:  VMK → compartment KEK → item DEK          （vault 全体）
+agent:  自分の KEM 秘密鍵 → grant された item の DEK だけ
+```
+
+VMK も compartment 鍵も agent には渡らない。読めるのは owner が
+`kagi agent grant` した item だけで、これは既存の `:share/grant` そのものなので:
+
+- **取り消しが本当に効く。** `kagi agent ungrant` は `:share/revoke` ——
+  item を再鍵し、残りの受信者へ再封入する。取り消された principal の envelope は
+  もう何も復号しない鍵を開ける。`kagi device revoke` が docstring で「これは
+  アクセス一覧の変更であって、その端末が既に得た VMK を取り消すものではない」と
+  認めざるを得ないのと対照的で、その差は **agent が vault 全体に効く物を最初から
+  持っていない**ことから来る。
+- **reach が列挙できる。** `kagi agent ls` が principal ごとに開ける item を出す。
+- **開示も拒否も、agent 自身の鍵で署名された鎖に残る**
+  （`$KAGI_HOME/agents/<id>.ledger.edn`、`kagi agent log <id>` が検証）。
+  agent は `vault.edn` を書けない —— 読むだけの principal が読み元を書き換えられる
+  なら読むだけではないので、台帳は別ファイルにした。
+
+```bash
+# agent 側（vault は要らない。自分の鍵を作って fingerprint を表示する）
+bin/kagi agent request --label resident@mac-1 --custody file --out req.edn
+
+# owner 側（fingerprint は必須 — 公開鍵の差し替えを捕まえる唯一の手段）
+bin/kagi agent approve req.edn --fingerprint 5QFB-... --compartment ops --ttl-days 30
+#   → account_key は一度だけ表示される。この時点ではまだ何も読めない
+bin/kagi agent grant <agent-id> fleet-token    # item を 1 件渡す
+bin/kagi agent ls                              # principal と、開ける item
+
+# agent 側（プロンプト無し、passphrase 無し、VMK 無し）
+KAGI_AGENT_ID=<agent-id> bin/kagi agent get fleet-token --purpose publish
+
+# 取り消し
+bin/kagi agent ungrant <agent-id> fleet-token  # 再鍵。ここで実際に閉じる
+bin/kagi agent revoke <agent-id>               # token を殺す + 残る grant を列挙
+```
+
+principal と invite は **`$KAGI_HOME/agents/registry.edn`**（`vault.edn` の外）。
+`kagi push` は snapshot 全体を 1 文字列として上げ last-writer-wins で解決するので、
+registry を snapshot に入れると **1 KB を記録するために 9.5 MB を再送**し、しかも
+**server が受理した enrollment を owner の次の push が黙って消す**（朝 enroll できた
+agent が昼には `:not-registered` になり、どのログにも何も残らない）。分離した結果、
+中身の性質も揃っている — snapshot は暗号文、registry は公開メタデータ（公開鍵・
+token の**ハッシュ**）で、秘密が無いからこそ server が書いてよい。
+`:share/grant` が要る member record は principal から**導出**する（複製しない）。
+
+`--custody file` は `$KAGI_HOME/agents/<id>.key`（mode 600）。Keychain より弱く、
+launchd 下で動く唯一の選択肢でもある。どちらを使っているかは principal に記録され
+`kagi agent ls` に出る —— 「どれが盗みやすいか」は暗黙より見える方が良い。
+
+## agent が自分で登録する API（`kagi agent serve`）
+
+agentmail.to と同じ 3 コール。**`account_key` は一度しか返らない。**
+
+**経路は必ず tenant を名指す** — `<base> = /v1/t/<tenant did>`。1 台のサーバが複数の
+vault を持てるので、どれかを言わない経路は「どう起動したか」で答えが変わってしまう。
+`kagi agent serve` はそのまま貼れる `:base-url` を出力する。
+
+```text
+POST <base>/agents/challenges  → {challenge_id, algorithm:"sha256-v1", challenge,
+                                  difficulty_bits, expires_at}
+  ローカルで解く: sha256(challenge ":" nonce) の先頭 N bit が 0
+POST <base>/agents             → {agent_id, account_key, not_after, ops, compartments}
+
+GET  <base>/whoami                    （Authorization: Bearer <account_key>）
+GET  <base>/items                     grant のある item のメタデータだけ
+GET  <base>/items/<id>/sealed         封緘済み素材（下記）
+POST <base>/audit                     agent 自身の署名済み台帳を提出する
+```
+
+**challenge はサーバ状態を持たない。** `<payload>.<HMAC>` の署名済みトークンで、
+`{challenge, difficulty, expiry}` を自分で運ぶ。だから 1 つの URL の裏に複数
+インスタンスを置けるし、再起動が飛行中の enrollment を落とさない
+（`KAGI_AGENT_CHALLENGE_KEY` を共有すると相互に受理する。未設定ならプロセスごとの
+ランダム鍵 = 再起動で失効、TTL 120 秒なので許容）。
+
+代償も書いておく: **解いた challenge は失効まで再提示できる。** in-memory の
+`spent` 集合は単一インスタンスでの使い回しを弾くが保証ではない。実際に効いている
+上限は別のところ —— enrollment には必ず invite が要り、invite には `uses-left` がある。
+PoW は総当たりの速度制限であって、最初から stranger と vault の間に立つものではない。
+
+**PoW は認証ではない。** scope は必ず owner が先に発行した invite
+（`kagi agent invite --compartment ops`）から来る。PoW が完璧でも invite 無しの
+enrollment は `:invite-missing` で拒否される。puzzle を解いた者に渡して良いのは
+puzzle の値段のものだけで、vault は違う。PoW が買うのは「invite の総当たりが
+1 回 ~2^20 hash かかる」ことだけ。
+
+**この server は VMK を持たない。** `/sealed` が返すのは *その principal の公開鍵へ
+既に封入済みの* grant envelope と item の暗号文で、開くのは SDK（呼び出し側の
+プロセス）。だから TLS 終端・リバースプロキシ・この server の heap dump・ログの
+どれからも出てくるのは暗号文で、`vault.edn` が既に見せているものと同じ。
+強制点は復号ではなく **release** —— envelope を出さなければ平文は無い。
+
+item を渡す判断（`kagi agent grant`）だけは VMK が要るので owner の CLI に残した。
+agent が何を読めるかを決めるのは、人にコマンド 1 本のコストを払わせて良い判断。
+
+### vault の無いホストで serve する（公開 URL の前提）
+
+```bash
+# owner 側（vault のある機械）
+bin/kagi push                                   # 暗号化 snapshot を bucket へ
+bin/kagi agent invite --compartment ops         # 招待は bucket 側の registry に入る
+
+# server 側（vault ファイルが 1 つも無いホスト）
+bin/kagi agent serve --backend object --did <tenant did> --port 8901
+# {:ok? true, :listening "http://…", :store {:label :object, :did "did:key:z6Mk…"}, :bucket "…"}
+
+# agent 側
+#   enroll → owner が grant → open-item!  で平文が出る
+```
+
+server は **vault ファイルも VMK も持ちません**。bucket から snapshot と registry を読み、
+封緘済み素材を release するだけです（復号は SDK 側）。`kagi.agent-docs` が
+`{:vault :registry :update-registry! :read-audit :write-audit!}` の seam で、
+local ファイルと object store のどちらでも同じサービスコードが動きます。
+
+registry は object store 側でも版付きキーで CAS されます（`kagi/<did>/registry/v<N>.edn`
+＋ `HEAD`）。並行 enrollment は後から来た方が自分の書き込みを失うだけで、
+相手の registry を消しません。
+
+`kagi agent invite` / `approve` / `ls` / `revoke` / `grant` も `--backend object` を取ります
+—— でないと「存在するのに使えない招待」（local registry に入ったが bucket 側の API は
+読まない）が作れてしまいます。
+
+### remote agent の監査 — 記録を作るのは client 側
+
+HTTP 経路には **governor 実行が無い**（server は封緘済み素材を release するだけで、
+復号は SDK 側）。だから「何を、なぜ開いたか」の記録は **client が署名して作るか、
+どこにも無いか**のどちらかになる。SDK は自分の鎖を持ち、owner に返せる:
+
+```clojure
+(def c (agent/client {:base-url … :tenant … :account-key …
+                      :agent-did (:did principal)
+                      :sign-secret (:sign (:secret enrolled))}))   ; ← 監査鍵
+
+(agent/open-item! c kem "fleet-token" :publish)   ; purpose が鎖に載る
+(agent/submit-audit! c)                            ; => {:status :accepted :entries 2 :new 2}
+```
+
+owner 側:
+
+```bash
+bin/kagi agent audit <agent-id>    # 提出された鎖を、registry の公開鍵で検証して表示
+bin/kagi agent log   <agent-id>    # local agent が vault の隣に書いた鎖（別物）
+```
+
+server は **registry が記録した公開鍵**で検証し、壊れた鎖・短くなった鎖・既に持っている
+ものと分岐した鎖を拒否する。agent が書いていても owner 側から見れば append-only。
+
+⚠ 提出は EDN で行う。JSON 往復は fact の keyword 値を文字列に変え、`pr-str` のバイト列が
+変わって、改竄されていない鎖が検証に落ちる —— **運ぶものを書き換える transport は
+改竄検知ログを運べない**。
+
+### SDK（`kagi.agent-client`、`.cljc`）
+
+```clojure
+(require '[kagi.agent-client :as agent])
+
+(def c (agent/client {:base-url "https://vault.example" :tenant "did:key:z6Mk…"}))
+(def enrolled (agent/enroll! c {:invite "kagi_inv_…" :label "resident@mac-1"}))
+;; => {:agent-id … :account-key "kagi_agt_…" :secret {:kem … :sign …}}
+
+(def c2 (agent/client {:base-url "https://vault.example" :tenant "did:key:z6Mk…"
+                       :account-key (:account-key enrolled)}))
+(agent/items c2)
+(agent/open-item! c2 (:kem (:secret enrolled)) "fleet-token")
+;; => {:status :ok :plaintext "…"}   ← 復号はここで起きる
+```
+
+crypto は `kagi.crypto/Provider` seam 越しなので JVM(BouncyCastle) と
+nbb/ブラウザ(`@noble/*`) で**同じ実装**を通る（両方向の interop ベクタが既にある）。
+違うのは transport だけ（`java.net.http` は同期、`fetch` は promise を返す）。
+**JVM 経路は suite で実証済み、cljs 経路はこの repo の CI では未実行。**
+
+`kagi.agent/signer` は `kagi.chain-signer` を agent session に繋いだもので、
+署名鍵の item を governor 経由で毎回開き、公開鍵と署名だけを返す（seed は返さない）。
 
 ## ローカルの窓（`kagi ui`）
 
@@ -219,10 +408,98 @@ kotobase.net は ciphertext しか保持せず、master passphrase / OS-keychain
 信頼の根ではない）。
 
 ```bash
-bin/kagi push   # 自分の graph kotobase/db/<did>/kagi-vault へ暗号化 snapshot を upsert
+bin/kagi push   # 暗号化 snapshot を cloud へ upsert
 bin/kagi pull   # cloud から最新 snapshot を取得して local vault を置換（先に .bak へ退避）
 bin/kagi sync   # pull → optimistic seq check → push（途中のremote更新は競合として拒否）
 ```
+
+### backend は 2 つある（一方は現在 401 で拒否される）
+
+```bash
+bin/kagi push --backend object     # S3 互換 object store（Backblaze B2 / Storj）
+bin/kagi push --backend kotobase   # kotobase.net の tenant graph（従来）
+bin/kagi push                      # auto: object が設定されていればそれ、無ければ kotobase
+```
+
+**⚠ `kotobase` backend は 2026-08-28 時点で通らない。** `kotobase-graph-database` が
+`KOTOBASE_BISCUIT_AUTH_MODE=required` で動いており、**Biscuit 以外の Authorization を
+CACAO の分岐に到達する前に 401 にする**（ADR-2608281200）。この repo が mint する CACAO は
+正しい —— gateway 自身のアルゴリズムで SIWE がバイト一致し Ed25519 検証も通る —— ので
+kagi 側に直すものは無い。Biscuit を得るには tenant レコードと service account が要り、
+この vault はどちらも持っていない。
+
+**`object` backend はそのための第 2 の保管先**で、信頼モデルは同じ（store は ciphertext
+しか持たず、unlock secret は端末を離れない）。`kagi.store/object-sealed-block-store` が
+取るのと**同じ 4 関数**の上に張ってある。
+
+```
+kagi/<did>/catalog/v<n>.edn   members + item メタ + grants + block 目録（小さい）
+kagi/<did>/ledger/v<n>.edn    監査台帳（実測 99.2%。これがかさばる）
+kagi/<did>/blocks/<sha256>    item 1 個の暗号文（immutable）
+                              各 doc に HEAD ポインタ
+```
+
+**何がかさばるかは測って初めて分かった。** 最初「暗号文が bulk だろう」と推測して
+分割したが、実測は逆だった:
+
+| | bytes | n |
+|---|---:|---:|
+| **ledger** | **9,502,228** | 1,965 |
+| items | 37,637 | 88 |
+| blocks | 31,040 | 93 |
+| members | 5,382 | 1 |
+| grants / meta | 507 | |
+
+governed op ごとに hybrid 署名 entry が付き、ML-DSA-65 の署名は base64 で ~3.3 KB。
+**監査する対象より監査記録のほうが 2 桁大きい。** よって catalog は
+「誰が何を読んでよいかを決める ~43 KB」だけにし、台帳は別 doc にした。
+`/items` `/sealed` を答える server が読むのは **9,576,873 → 46,861 bytes**。
+
+block キーは **cid ではなく `sha256(cid)`**。理由は 2 つあり、どちらも実測:
+B2 が `blocks/cid:manimani-…:v1` の PUT に **HTTP 500** を返したこと、そして
+**キーが item 名を漏らす**こと（bucket を list できる者に「そういう名前の資格情報が
+ある」と教えてしまう。snabshot 1 個の時は漏れていなかった）。
+
+catalog は **push した block の目録を書き留める**。item の cid から導出すると、
+rotation で置き換わった旧版が復元されず **93 → 88 に黙って減った**。
+4 関数の seam に `list` は無いので、目録は書くしかない。
+
+version 付きキーが並行制御そのもの。object store は 4 関数の seam に CAS を持たないが、
+**「既に別のバイト列が入っているキーへの書き込みを拒む」**ことはできる。2 台が同じ
+seq から push すると両方 `v<N+1>.edn` を狙い、後から来た方は自分が書いていないバイト列を
+見つけて `:sync-conflict` で落ちる —— 相手の vault を消さない。同一バイト列の再 PUT
+（部分失敗からのリトライ）は通る。HEAD は last-writer-wins だが、**指しうる版は全部
+store に残っている**ので、HEAD の競合に負けても失うのは pull と再 push の手間だけ。
+
+設定は環境変数のみ（この経路は vault も 1Password も自分で引かない — credential は
+実行する人が渡す）:
+
+```bash
+export KAGI_OBJECT_BUCKET=my-kagi-vault
+export KAGI_OBJECT_KEY_ID=...            # or B2_KEY_ID
+export KAGI_OBJECT_APP_KEY=...           # or B2_APP_KEY
+export KAGI_OBJECT_ENDPOINT=https://s3.us-west-004.backblazeb2.com
+export KAGI_OBJECT_REGION=us-west-004    # 任意
+export KAGI_OBJECT_PREFIX=kagi/          # 任意
+```
+
+この vault の実運用値（2026-08-28 稼働）:
+
+| | |
+|---|---|
+| bucket | `com-junkawasaki-kagi`（allPrivate、この用途専用。2026-08-28 稼働、restore 検証済み） |
+| 鍵の正本 | kagi item **`com-junkawasaki-kagi-b2`**（compartment `gftdcojp`） |
+| Keychain ミラー | service `b2:com-junkawasaki-kagi`（launchd 下用） |
+| capabilities | `listBuckets,listFiles,readFiles,writeFiles` — **delete を外してある** |
+
+`deleteFiles` を外したのは意図的で、この backend は上書きも削除もせず、
+**古い版が残ること自体が HEAD 競合に負けた時の復旧手段**だから。削除できる鍵は
+その性質を壊せる。同じ理由で B2 の lifecycle rule も設定していない（1 push ≒ 9.5 MB
+で版は増える。保持方針はオーナー判断）。
+
+io-storj は **`:cli` / `:test` alias の extra-dep** であってライブラリの依存ではない。
+`kagi.store` / `kagi.sync` は 4 関数を受け取るだけで、どのバケットかを知らない
+（配線を持つのは `kagi.object-store` と `bin/kagi` だけ）。
 
 - 認可は depth-1 の自己発行 CACAO（actor が自分の DID を graph に持つので、
   handed token も coordination-server auth-key も不要）。

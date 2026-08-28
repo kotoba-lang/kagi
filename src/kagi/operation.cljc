@@ -45,6 +45,47 @@
   (let [kek (crypto/compartment-key crypto* (:vmk context) (:item/compartment it))]
     [kek (crypto/unwrap-dek crypto* kek (:item/wrap it))]))
 
+(defn- recipient-dek
+  "受信者の経路: item の grant envelope を、actor 自身の hybrid KEM 秘密鍵で
+  decapsulate して DEK を得る。**VMK には触れない。**
+
+  agent principal が通るのはこちらで、agent が VMK を一度も持たずに済む理由が
+  これ。`item-dek` は VMK から compartment KEK を導出する —— VMK は vault 全体を
+  1 つの値にしたものなので、それを渡した時点で scope は無い。
+
+  ここが無かった間、`:share/grant` が作る envelope を開ける経路は
+  `crypto/accept-share` の手書き呼び出しだけだった（`kagi.governor-contract-test`
+  が実際にそうしている）。**共有する**側は製品として在り、**共有される**側が
+  無かった。
+
+  grant が無い/失効している時は nil を返し、呼び出し側が名前を付けて拒否する。
+  owner 経路へフォールバックはしない —— KEM 秘密鍵を持つが grant を持たない actor が、
+  たまたま同じプロセスに VMK があるという理由で item を読めてはならない。"
+  [store* crypto* context it]
+  (when-let [grant (first (filter #(and (= (:did context) (:grant/recipient %))
+                                        (not (:grant/revoked %)))
+                                  (store/grants-of store* (:item/id it))))]
+    (crypto/accept-share crypto* (:kem-secret context) (:grant/envelope grant))))
+
+(defn- reveal-dek
+  "どちらの custody 経路で item を開くかを 1 か所で決める。
+
+  VMK があれば従来どおり owner 経路（既存の呼び出し側は全てこちら）。無ければ
+  受信者経路。どちらも無い context は、NullPointerException を 3 フレーム先で
+  出す代わりにここで名前を付けて落ちる。"
+  [store* crypto* context it]
+  (cond
+    (:vmk context) (second (item-dek store* crypto* context it))
+
+    (:kem-secret context)
+    (or (recipient-dek store* crypto* context it)
+        (throw (ex-info "kagi.operation: この受信者に有効な grant が無い"
+                        {:op :item/reveal :item (:item/id it) :actor (:did context)})))
+
+    :else
+    (throw (ex-info "kagi.operation: item を開く鍵が context に無い（VMK も KEM 秘密鍵も）"
+                    {:op :item/reveal :item (:item/id it) :actor (:did context)}))))
+
 (defn- rotate-item-plan
   [store* crypto* context it]
   (let [item-id (:item/id it)
@@ -90,7 +131,7 @@
     :item/reveal
     (let [{:keys [item-id]} request
           it  (store/item store* item-id)
-          [_ dek] (item-dek store* crypto* context it)
+          dek (reveal-dek store* crypto* context it)
           pt  (crypto/open-item crypto* dek (:item/nonce it)
                                 (store/block-get store* (:item/cid it))
                                 (vault/item-aad item-id))]
@@ -138,8 +179,21 @@
        :rekey-plan (assoc plan :grants grants)})
 
     :item/list
+    ;; owner は compartment の全 item を見る。owner でない actor（agent principal
+    ;; を含む）には **自分に grant がある item だけ** を返す —— 一覧は復号しないが、
+    ;; item id は「この vault に何が入っているか」そのものであり、開けない物の名前
+    ;; まで配る理由が無い。
     {:effect :listed
-     :items (mapv :item/id (store/items-in store* (:compartment request)))}))
+     :items (let [all (store/items-in store* (:compartment request))]
+              (if (= :owner (:role context))
+                (mapv :item/id all)
+                (into []
+                      (comp (map :item/id)
+                            (filter (fn [id]
+                                      (some #(and (= (:did context) (:grant/recipient %))
+                                                  (not (:grant/revoked %)))
+                                            (store/grants-of store* id)))))
+                      all)))}))
 
 ;; ───────── グラフ ─────────
 
