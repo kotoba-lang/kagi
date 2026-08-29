@@ -1,6 +1,6 @@
 (ns kagi.passkey-bridge
   "One-shot loopback-only browser bridge for WebAuthn PRF registration."
-  (:require [clojure.data.json :as json]
+  (:require [json.data-json :as json]
             [kagi.crypto :as crypto])
   (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
            [java.io ByteArrayOutputStream]

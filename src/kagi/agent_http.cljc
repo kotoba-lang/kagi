@@ -54,7 +54,7 @@
   described in two places is a response that drifts in one of them.
 
   ## `.cljc` with only a `:clj` branch, and saying so\n\n  Everything below binds a socket through `com.sun.net.httpserver`, so the JVM\n  half is the only half that exists today. The file carries the portable\n  extension because the RULE is that new production code is portable-first\n  (ADR-2608201300), and because the split this needs is real rather than\n  cosmetic: routing, the challenge token shape and the response encoding are\n  host-independent, and `kagi.ui.server` is the worked example of separating\n  them in this repo. That separation is the remaining Worker-port work\n  (ADR-2608281100), and this comment is here so the extension does not claim\n  it has already happened."
-  #?@(:clj [(:require [clojure.data.json :as json]
+  #?@(:clj [(:require [json.data-json :as json]
             [clojure.string :as str]
             [clojure.walk :as walk]
             [kagi.agent-protocol :as proto]

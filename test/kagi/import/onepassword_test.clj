@@ -5,7 +5,7 @@
   test で行うので、ここでは kagi 側の glue(plan→:item/create→:item/reveal)
   だけを対象にする。"
   (:require [clojure.test :refer [deftest testing is]]
-            [clojure.data.json :as json]
+            [json.data-json :as json]
             [langgraph.graph :as g]
             [kagi.operation :as op]
             [kagi.store :as store]

@@ -147,11 +147,11 @@
    (defn- json->clj [s]
      ;; data.json is required lazily so the portable half of this namespace
      ;; carries no JVM-only dependency into a cljs compile.
-     ((requiring-resolve 'clojure.data.json/read-str) s :key-fn keyword)))
+     ((requiring-resolve 'json.data-json/read-str) s :key-fn keyword)))
 
 #?(:clj
    (defn- clj->json [v]
-     ((requiring-resolve 'clojure.data.json/write-str) v)))
+     ((requiring-resolve 'json.data-json/write-str) v)))
 
 #?(:clj
    (defn client

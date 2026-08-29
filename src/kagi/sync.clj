@@ -33,7 +33,7 @@
   so vault persistence does not have to wait on that provisioning decision,
   and it keeps the same trust model — the store holds ciphertext and the
   unlock secret never leaves the device."
-  (:require [clojure.data.json :as json]
+  (:require [json.data-json :as json]
             [clojure.string :as str]
             [kagi.cacao :as cacao]
             [kagi.crypto :as crypto]
