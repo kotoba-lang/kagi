@@ -23,6 +23,13 @@
   `org-nist-aes`). Keep this provider on production hot paths; do not remove
   `@noble/ciphers` from package.json until reference is measured on-path.
 
+  ## `@noble/hashes` substitution
+
+  SHA-256 and HKDF-SHA256 use `@noble/hashes` here. For host-provider /
+  correctness paths use `kagi.digest.reference` and `kagi.crypto.reference`
+  (`sha2.core` from `org-nist-sha2`). Do not remove `@noble/hashes` from
+  package.json while this provider still owns those primitives on-path.
+
   ## 鍵の符号化 —— DER prefix の付け外し
 
   JVM 側は JCA が返す X.509(SPKI) / PKCS#8 の **DER 符号化**バイト列をそのまま

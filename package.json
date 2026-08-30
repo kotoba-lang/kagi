@@ -13,6 +13,7 @@
   },
   "scripts": {
     "test:cljs": "nbb --classpath src:test -m kagi.crypto.noble-interop-test",
-    "test:reference": "nbb --classpath src:test:../org-nist-aes/src -m kagi.crypto.reference-aead-test"
+    "test:reference": "nbb --classpath src:test:../org-nist-aes/src:../org-nist-sha2/src -m kagi.crypto.reference-aead-test",
+    "test:reference-hashes": "nbb --classpath src:test:../org-nist-sha2/src -m kagi.digest.reference-test"
   }
 }

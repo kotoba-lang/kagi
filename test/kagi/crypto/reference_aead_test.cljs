@@ -32,7 +32,21 @@
     (testing "AAD mismatch fails closed"
       (let [ct (c/aead-seal ref-p key nonce pt aad)]
         (is (thrown? js/Error
-                     (c/aead-open ref-p key nonce ct (c/utf8-bytes "other-aad"))))))))
+                     (c/aead-open ref-p key nonce ct (c/utf8-bytes "other-aad"))))))
+    (testing "HKDF-SHA256 matches noble (zero salt)"
+      (let [ikm (c/rand-bytes noble-p 48)
+            salt (js/Uint8Array. 0)
+            info (c/utf8-bytes "kagi-hkdf-context")]
+        (is (bytes= (c/hkdf noble-p ikm salt info 64)
+                    (c/hkdf ref-p ikm salt info 64))))))
+  (testing "HKDF-SHA256 matches noble (non-empty salt)"
+    (let [noble-p (noble/noble-provider)
+          ref-p (reference/reference-provider)
+          ikm (c/rand-bytes noble-p 32)
+          salt (c/rand-bytes noble-p 16)
+          info (c/utf8-bytes "salted")]
+      (is (bytes= (c/hkdf noble-p ikm salt info 32)
+                  (c/hkdf ref-p ikm salt info 32))))))
 
 (defn -main [& _]
   (run-tests 'kagi.crypto.reference-aead-test))
