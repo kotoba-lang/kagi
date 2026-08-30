@@ -12,6 +12,7 @@
     "nbb": "^1.3.196"
   },
   "scripts": {
-    "test:cljs": "nbb --classpath src:test -m kagi.crypto.noble-interop-test"
+    "test:cljs": "nbb --classpath src:test -m kagi.crypto.noble-interop-test",
+    "test:reference": "nbb --classpath src:test:../org-nist-aes/src -m kagi.crypto.reference-aead-test"
   }
 }
