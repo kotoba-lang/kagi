@@ -16,6 +16,13 @@
   ML-KEM-768(FIPS 203) と ML-DSA-65(FIPS 204) は `@noble/post-quantum` にあるため、
   ブラウザでも **hybrid を古典のみに縮退させない**。
 
+  ## `@noble/ciphers` substitution
+
+  AEAD here uses `@noble/ciphers/aes.js` (AES-256-GCM). For host-provider /
+  correctness paths use `kagi.crypto.reference` (`aes.gcm` from
+  `org-nist-aes`). Keep this provider on production hot paths; do not remove
+  `@noble/ciphers` from package.json until reference is measured on-path.
+
   ## 鍵の符号化 —— DER prefix の付け外し
 
   JVM 側は JCA が返す X.509(SPKI) / PKCS#8 の **DER 符号化**バイト列をそのまま
