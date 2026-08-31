@@ -955,7 +955,7 @@
                 p {:timeout-seconds 120
                    :on-input
                    (fn [input]
-                     (let [result (passkey/consume-bridge-input input "127.0.0.1")
+                     (let [result (passkey/consume-bridge-input input "localhost")
                            wrap (unlock/passkey-prf-wrap
                                  p vmk (:prf-output result)
                                  (select-keys result [:rp-id :credential-id :prf-salt]))]

@@ -41,11 +41,16 @@
               (recur next))))))))
 
 (defn start!
-  "Start on 127.0.0.1 and return {:url :token :await :stop}. on-input runs once."
+  "Serve on http://localhost:PORT and return {:url :origin :token :await :stop}.
+  The RP ID must be `localhost`, not `127.0.0.1`: WebAuthn rejects an IP
+  address as an RP ID (\"This is an invalid domain\"), while `localhost` is a
+  valid registrable name and http://localhost is a secure context on every
+  major browser. The bridge still only accepts loopback connections —
+  binding to the localhost interface keeps the secret PRF output local."
   [p {:keys [on-input timeout-seconds] :or {timeout-seconds 120}}]
-  (let [server (HttpServer/create (InetSocketAddress. (InetAddress/getByName "127.0.0.1") 0) 0)
+  (let [server (HttpServer/create (InetSocketAddress. (InetAddress/getLoopbackAddress) 0) 0)
         port (.getPort (.getAddress server))
-        origin (str "http://127.0.0.1:" port)
+        origin (str "http://localhost:" port)
         secret-token (token p)
         delivered (promise)
         consumed? (atom false)
@@ -74,13 +79,18 @@
                           (if-not valid?
                             (respond! exchange 403 "application/json" "{\"ok\":false}")
                             (try
-                              (let [input (json/read-str (read-body exchange)
-                                                         :key-fn keyword)
+                              (let [input (json/read-str (read-body exchange))
+                                    input (into {} (map (fn [[k v]] [(keyword k) v])) input)
                                     result (on-input input)]
                                 (respond! exchange 200 "application/json" "{\"ok\":true}")
                                 (deliver delivered result))
-                              (catch Exception _error
+                              (catch Exception error
                                 (reset! consumed? false)
+                                ;; Log the real failure server-side: the
+                                ;; browser only sees a generic 400, which
+                                ;; made "bridge rejected registration"
+                                ;; undiagnosable (measured 2026-08-31).
+                                (.printStackTrace error)
                                 (respond! exchange 400 "application/json" "{\"ok\":false}"))))))))
     (.start server)
     (let [stop #(do (.stop server 0) (.shutdownNow executor))]
