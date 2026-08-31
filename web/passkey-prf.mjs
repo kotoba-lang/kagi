@@ -4,8 +4,16 @@ const bytes = (value, name) => {
   throw new TypeError(`${name} must be bytes`);
 };
 
-export const base64url = (value) =>
-  Buffer.from(bytes(value, "value")).toString("base64url");
+// Base64url WITHOUT Node's Buffer: the passkey bridge page runs in the
+// browser, where `Buffer` does not exist. btoa only accepts Latin-1 chars,
+// so binary bytes are stringified via String.fromCharCode in 8KB chunks.
+const base64url = (value) => {
+  const b = bytes(value, "value");
+  let binary = "";
+  for (let i = 0; i < b.length; i += 0x2000)
+    binary += String.fromCharCode.apply(null, b.subarray(i, i + 0x2000));
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
 
 const random = (crypto, size) => {
   const out = new Uint8Array(size);
