@@ -34,9 +34,19 @@
         {:git/url "https://github.com/kotoba-lang/security.git"
          :git/sha "49fc4ce359752e9fe6e547e9071b5b9b40da937a"}
         ;; Canonical receipt bytes for signed incident-response evidence.
-        io.github.kotoba-lang/dag-cbor
-        {:git/url "https://github.com/kotoba-lang/dag-cbor.git"
-         :git/sha "578a48aeca110497298d22ce6d8b322dc14fe170"}
+        ;; Renamed upstream: kotoba-lang/dag-cbor is kotoba-lang/org-ietf-cbor.
+        ;; The old name resolved only through GitHub's redirect, and a redirect
+        ;; is not a dependency declaration -- it is a courtesy the far side can
+        ;; withdraw, and evidence signed against a coordinate that names no
+        ;; repository is evidence nobody can re-resolve to check. 578a48ae is
+        ;; the same commit under either name, so receipts already signed still
+        ;; verify against the same encoder. tools.deps dedupes by the coordinate
+        ;; SYMBOL, so carrying both spellings would mean two cbor.core and two
+        ;; sets of canonical bytes. The :git/url is dropped rather than
+        ;; corrected: io.github.<org>/<name> derives it, and a separate URL is
+        ;; what let this entry keep naming a repository that had been renamed.
+        io.github.kotoba-lang/org-ietf-cbor
+        {:git/sha "578a48aeca110497298d22ce6d8b322dc14fe170"}
         ;; canonical did:key + IPNS-name derivation (ADR-2607050100) — replaces
         ;; this repo's own copy-pasted base58btc/base36/did-key/ipns-name.
         io.github.kotoba-lang/org-ietf-ed25519
