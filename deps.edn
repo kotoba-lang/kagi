@@ -42,11 +42,20 @@
         ;; the same commit under either name, so receipts already signed still
         ;; verify against the same encoder. tools.deps dedupes by the coordinate
         ;; SYMBOL, so carrying both spellings would mean two cbor.core and two
-        ;; sets of canonical bytes. The :git/url is dropped rather than
-        ;; corrected: io.github.<org>/<name> derives it, and a separate URL is
-        ;; what let this entry keep naming a repository that had been renamed.
+        ;; sets of canonical bytes.
+        ;;
+        ;; The :git/url is restored and corrected rather than left derived.
+        ;; Letting io.github.<org>/<name> derive it makes the coordinate and the
+        ;; repository incapable of disagreeing again, which is why the first
+        ;; pass here dropped it -- but measured afterwards in the same sweep, a
+        ;; URL-less entry also vanishes from scripts/verify-repository-roles.cljs,
+        ;; whose production-deps keeps only coordinates carrying one. This repo
+        ;; declares no repository-rules.edn today, so nothing breaks either way;
+        ;; the URL stays so that adding one later cannot quietly under-report
+        ;; what signs the receipts.
         io.github.kotoba-lang/org-ietf-cbor
-        {:git/sha "578a48aeca110497298d22ce6d8b322dc14fe170"}
+        {:git/url "https://github.com/kotoba-lang/org-ietf-cbor.git"
+         :git/sha "578a48aeca110497298d22ce6d8b322dc14fe170"}
         ;; canonical did:key + IPNS-name derivation (ADR-2607050100) — replaces
         ;; this repo's own copy-pasted base58btc/base36/did-key/ipns-name.
         io.github.kotoba-lang/org-ietf-ed25519
