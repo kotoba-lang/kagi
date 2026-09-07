@@ -6,7 +6,7 @@
   two phase: prepare returns a signed Kagi rotation event and wrapped key but
   does not change the current keyring; only a head that won remote CAS is
   adopted into the durable rotation DAG and local vault metadata."
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]

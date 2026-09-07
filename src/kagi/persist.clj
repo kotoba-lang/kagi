@@ -2,7 +2,7 @@
   "vault スナップショットの edn 永続化。byte[] は base64 にして edn 安全にする。
   保存されるのは **暗号文 + wrap 済み鍵 + 台帳メタ** のみ(平文・素の VMK は出ない)。"
   (:require [clojure.walk :as walk]
-            [clojure.edn :as edn])
+            [kotoba.lang.edn :as edn])
   (:import [java.util Base64]
            [java.nio ByteBuffer]
            [java.nio.charset StandardCharsets]

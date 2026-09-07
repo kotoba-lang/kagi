@@ -10,7 +10,7 @@
     npm install
     npx nbb --classpath src:test -m kagi.crypto.noble-interop-test"
   (:require [cljs.test :refer [deftest is testing run-tests]]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [kagi.crypto :as c]
             [kagi.crypto.noble :as noble]
             ["node:fs" :as fs]))
