@@ -2,7 +2,7 @@
   "AES-256-GCM/HKDFの標準KAT、hybrid ML-KEM/ML-DSA、Argon2id、item/DEKの
   roundtrip・negative・downgrade境界テスト。"
   (:require [clojure.test :refer [deftest testing is]]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [kagi.crypto :as crypto])
   (:import [java.util HexFormat Arrays]

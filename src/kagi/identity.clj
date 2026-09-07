@@ -6,7 +6,7 @@
 
   `.kagi/identity.edn` は公開metadataとSecretStore/native-handle参照のみを保持する。
   production署名鍵は非exportable OS/HSM handleを必須とする。"
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [ed25519.core :as ed25519]
             [ipns.core :as ipns]
             [kagi.crypto :as crypto]
