@@ -28,7 +28,7 @@
   （1Password のリスト画面がまさにそれ）。区別が保たれるのは列挙が復号を
   伴わないから: `items` はメタデータだけを返し、平文は `reveal` を明示的に
   呼んだ item にしか現れない。"
-  (:require [kotoba.lang.edn :as edn]
+  (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [kagi.cacao :as cacao]
             [kagi.crypto :as crypto]

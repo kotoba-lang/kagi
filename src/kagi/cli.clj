@@ -23,7 +23,7 @@
     kagi rotate <name>              # DEK を回転(再封緘)
     kagi log                        # 監査台帳(hybrid 署名 + ハッシュ鎖)を検証して表示
     kagi whoami                     # 自分の did:key / IPNS graph"
-  (:require [kotoba.lang.edn :as edn]
+  (:require [clojure.edn :as edn]
             [clojure.pprint :as pprint]
             [clojure.string :as str]
             [langgraph.graph :as g]

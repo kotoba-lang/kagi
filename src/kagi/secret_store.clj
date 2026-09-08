@@ -3,7 +3,7 @@
 
   Secret values are returned only to runtime code that needs them. Callers must
   not log returned values."
-  (:require [kotoba.lang.edn :as edn]
+  (:require [clojure.edn :as edn]
             [clojure.java.shell :as sh]
             [clojure.string :as str])
   (:import [java.nio.charset StandardCharsets]
