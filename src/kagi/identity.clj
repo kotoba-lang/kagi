@@ -241,7 +241,7 @@
         (when (some #(contains? stored %)
                     (cond-> [:private-b64 :mldsa-private-b64] recipient (conj :kem-secret)))
           (throw (ex-info "SecretStore did not remove exportable native key material" {}))))
-      (spit path (pr-str public*))
+      (spit path (binding [*print-namespace-maps* false] (pr-str public*)))
       {:migrated? true :secret-ref ref :native-signing-handle metadata})))
 
 (defn migrate-identity-secret!
@@ -286,7 +286,7 @@
         public* (cond-> base-public
                   (:kem-key base-public) (assoc-in [:kem-key :key/custody-ref] secret-ref))]
     (secret-store/put-edn! secret-store secret-ref secret)
-    (spit path (pr-str public*))
+    (spit path (binding [*print-namespace-maps* false] (pr-str public*)))
     public*))
 
 (defn load-or-create-identity!
@@ -302,7 +302,7 @@
              m* (ensure-key-metadata m)]
          (if (secret-backed-identity? m*)
            (do
-             (when (not= m m*) (spit f (pr-str m*)))
+             (when (not= m m*) (spit f (binding [*print-namespace-maps* false] (pr-str m*))))
              (load-secret-backed-identity
               m*
               (or secret-store (secret-store/store-for-ref (:secret-ref m*)))

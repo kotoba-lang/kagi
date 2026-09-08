@@ -211,7 +211,8 @@
     (throw (ex-info "unsupported secret ref scheme" {:ref (redact-ref ref)}))))
 
 (defn put-edn! [store ref value]
-  (put-secret! store ref (pr-str value) {:content-type "application/edn"}))
+  (put-secret! store ref (binding [*print-namespace-maps* false] (pr-str value))
+               {:content-type "application/edn"}))
 
 (defn get-edn [store ref]
   (edn/read-string (get-secret store ref {:content-type "application/edn"})))

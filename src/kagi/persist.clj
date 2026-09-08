@@ -25,7 +25,9 @@
     (.decode (Base64/getDecoder) ^String (:kagi/b64 x))
     x))
 
-(defn ->edn ^String [data] (pr-str (walk/postwalk enc data)))
+(defn ->edn ^String [data]
+  (binding [*print-namespace-maps* false]
+    (pr-str (walk/postwalk enc data))))
 (defn <-edn [^String s] (walk/postwalk dec* (edn/read-string s)))
 
 (defn save! [path data]
