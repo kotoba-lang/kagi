@@ -316,10 +316,11 @@
         ;; Written through a temp file and renamed: a half-written registry is
         ;; worse than none, because it reads as authoritative.
         tmp (str path ".tmp")]
-    (spit tmp (with-out-str
-                (println ";; kagi credential references — NO SECRET VALUES.")
-                (println ";; Written by `kagi add --record`. Safe to commit.")
-                (pprint/pprint merged)))
+    (spit tmp (binding [*print-namespace-maps* false]
+                (with-out-str
+                  (println ";; kagi credential references — NO SECRET VALUES.")
+                  (println ";; Written by `kagi add --record`. Safe to commit.")
+                  (pprint/pprint merged))))
     (.renameTo (java.io.File. tmp) (java.io.File. ^String path))
     record))
 

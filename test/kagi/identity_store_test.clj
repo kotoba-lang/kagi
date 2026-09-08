@@ -43,7 +43,8 @@
   (let [p (crypto/jvm-provider)
         id (identity/generate-identity p)
         file (java.io.File/createTempFile "kagi-legacy-identity" ".edn")]
-    (spit file (pr-str (select-keys id (into identity/secret-fields identity/public-fields))))
+    (spit file (binding [*print-namespace-maps* false]
+              (pr-str (select-keys id (into identity/secret-fields identity/public-fields)))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires migration"
                           (identity/load-or-create-identity! (.getPath file) p)))
     (is (= (:did id)
