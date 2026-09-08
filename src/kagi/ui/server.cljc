@@ -42,7 +42,7 @@
   ;; branch never uses is a `.clj` wearing a different extension.
   (:require #?@(:clj [[clojure.java.io :as io]
                       [kagi.ui :as ui]])
-            [clojure.string :as str])
+            [kotoba.lang.text :as str])
   #?(:clj
      (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
               [java.io ByteArrayOutputStream]

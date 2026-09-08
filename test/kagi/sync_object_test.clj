@@ -4,7 +4,7 @@
   The fake is four functions over an atom because that IS the contract —
   `kagi.store/object-sealed-block-store` takes the same four, and a test that
   needed a real S3 would be testing Backblaze rather than this code."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest testing is]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
@@ -99,7 +99,7 @@
           dev-a (vault-with "device-a")
           dev-b (vault-with "device-b")]
       (is (= 1 (:seq (sync/object-push! {:fns fns :did did :vault-path (:path dev-a)}))))
-      (let [block-key (first (filter #(clojure.string/includes? % "/blocks/") (keys @a)))
+      (let [block-key (first (filter #(str/includes? % "/blocks/") (keys @a)))
             a-block (get @a block-key)
             head-key (str "kagi/" did "/catalog/HEAD")
             ;; device B never pulled, so it still believes the remote is empty

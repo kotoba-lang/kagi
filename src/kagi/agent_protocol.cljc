@@ -44,7 +44,7 @@
   `digest-string-fn` returns a printable digest that can sit in EDN and be
   compared as a value. Passing one where the other belongs silently changes
   what a difficulty level means."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def ^:const algorithm
   "The only PoW algorithm this protocol speaks. Named on the wire so a future
@@ -235,5 +235,5 @@
   its base64 compared against a hash."
   [authorization]
   (let [s (str/trim (str authorization))]
-    (when (str/starts-with? (str/lower-case s) "bearer ")
+    (when (str/starts-with? (str/lower s) "bearer ")
       (not-empty (str/trim (subs s 7))))))

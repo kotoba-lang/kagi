@@ -14,7 +14,7 @@
      audit trail says WHICH key did WHAT, not merely that the seed was read.
   4. A refused reveal (nil) is a NAMED refusal, and a locked/absent vault
      session is refused at construction."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is]]
             [btc-crypto.bip32 :as bip32]
             [btc-crypto.bip39 :as bip39]

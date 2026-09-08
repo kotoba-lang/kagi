@@ -6,7 +6,7 @@
   bucket, releases ciphertext, and the client decrypts. If this passes, `kagi
   agent serve` can run somewhere the vault is not — which is the whole
   prerequisite for putting the API behind a URL."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kagi.agent :as agent]
             [kagi.agent-client :as client]

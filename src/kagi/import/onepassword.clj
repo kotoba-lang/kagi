@@ -6,13 +6,13 @@
   ——`kagi.operation` の `:item/create` 副作用ノード(唯一の書込経路)に渡すのが
   この ns の仕事の全て。kagitaba item はこの ns の外(呼び出し元のローカル変数)
   にも、vault にも、平文のまま残らない。"
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kagitaba.import.onepux-file :as onepux-file]))
 
 (defn slugify
   "compartment 名/item-id の既定導出。1Password vault 名 → kebab-case slug。"
   [s]
-  (let [slug (-> (str/lower-case (or s ""))
+  (let [slug (-> (str/lower (or s ""))
                 (str/replace #"[^a-z0-9]+" "-")
                 (str/replace #"^-+|-+$" ""))]
     (if (str/blank? slug) "default" slug)))

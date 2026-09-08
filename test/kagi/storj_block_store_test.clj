@@ -9,7 +9,7 @@
 
   同じ経路が **Backblaze B2** にもそのまま使える —— B2 は S3 互換面を出すので、
   違うのは `storj.gateway` に渡す endpoint だけ。"
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.store :as store]
@@ -39,7 +39,7 @@
     ;; storj.core は署名した通りの HTTP メソッド(大文字文字列 "GET"/"HEAD"/…)を
     ;; transport に渡す。入力側のキーワードのまま来ると思い込むと、この fake は
     ;; 実装ではなく自分の想像を試すことになる。
-    (let [method (-> method name str/lower-case keyword)
+    (let [method (-> method name str/lower keyword)
           k (key-of url)]
       (swap! requests conj {:method method :key k})
       (case method

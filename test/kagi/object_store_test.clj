@@ -7,7 +7,7 @@
   the production path. `kagi.storj-block-store-test` makes the same argument
   for the sealed-block seam and gives the reason: a fake-only test passes while
   the two sides disagree about what a byte is."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kagi.object-store :as object-store]
             [kagi.persist :as persist]

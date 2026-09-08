@@ -39,7 +39,7 @@
   Secrets may enter this namespace. They must never be returned, printed or
   logged; every public result carries metadata only."
   (:require [json.data-json :as json]
-            [clojure.string :as str])
+            [kotoba.lang.text :as str])
   (:import [java.net URI]
            [java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers
             WebSocket WebSocket$Listener]

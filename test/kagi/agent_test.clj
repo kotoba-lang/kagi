@@ -2,7 +2,7 @@
   "The claim this suite has to hold up: an agent principal reads exactly what
   it was granted, with no VMK anywhere in its process, and un-granting takes
   the access away for real rather than on paper."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest testing is]]
             [kagi.agent :as agent]
             [kagi.agent-protocol :as proto]

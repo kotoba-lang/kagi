@@ -8,7 +8,7 @@
   this breaks is somebody adding a convenient `.clj` require to a `.cljc`
   namespace, and the graph says so immediately."
   (:require [clojure.java.io :as io]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]))
 
 (def ^:private portable-roots

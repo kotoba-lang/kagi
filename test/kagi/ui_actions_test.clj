@@ -14,7 +14,7 @@
   server calls the actions it was handed. This one proves the actions handed
   to it by `kagi ui` really do reach the governor, and that a plaintext which
   genuinely exists still never reaches the page."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kagitaba.item :as kitem]
             [clojure.test :refer [deftest is testing]]
             [kagi.clipboard :as clipboard]

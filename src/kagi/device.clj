@@ -42,7 +42,7 @@
   kagi does not implement yet (`rotate` rotates an item DEK, not the VMK).
   `revoke` is therefore an access-list change, and the docstring on
   `revoke-device` says so where an operator will actually read it."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kagi.crypto :as crypto]
             [kagi.secret-store :as secret-store]
             [kagi.unlock :as unlock])
@@ -134,7 +134,7 @@
                     これを省くと、攻撃者の公開鍵に VMK を封入しても気付けない"})
 
     (and (seq public) (not (str/blank? (str confirmed-fingerprint)))
-         (not= (str/upper-case (str confirmed-fingerprint))
+         (not= (str/upper (str confirmed-fingerprint))
                (fingerprint (unb64-map public))))
     (conj {:rule :fingerprint-mismatch
            :detail "request の公開鍵と読み上げられた fingerprint が一致しない。

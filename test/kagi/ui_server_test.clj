@@ -6,7 +6,7 @@
   that only asserts 403 passes when the request was refused for some other
   reason entirely — which is how a control ends up green while the thing it
   claims to guard is wide open (CLAUDE.md, 'the six questions', item 6)."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kagi.ui :as ui]
             [kagi.ui.server :as ui-server])

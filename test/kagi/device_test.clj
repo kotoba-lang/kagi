@@ -1,7 +1,7 @@
 (ns kagi.device-test
   "Device enrollment: a second machine gets the vault without the master
   passphrase ever being copied to it."
-  (:require [clojure.test :refer [deftest testing is]]
+  (:require [kotoba.lang.text] [clojure.test :refer [deftest testing is]]
             [kagi.crypto :as crypto]
             [kagi.device :as device]
             [kagi.secret-store :as secret-store]
@@ -100,7 +100,7 @@
         {:keys [request fingerprint]} (request-on-new-device)
         grant (device/make-grant (p) vmk request fingerprint)
         blob (pr-str grant)]
-    (is (not (clojure.string/includes? blob (String. (byte-array (map #(bit-and % 0x7f) vmk))))))
+    (is (not (kotoba.lang.text/includes? blob (String. (byte-array (map #(bit-and % 0x7f) vmk))))))
     (is (nil? (:grant/vmk grant)))
     (testing "what it does carry is an encapsulation only the device can open"
       (is (some? (:grant/kem-ct grant)))
@@ -168,8 +168,8 @@
              field name proves nothing about whether its value leaked, which is
              the same mistake as searching printed output for PII and calling a
              namespaced-key map clean."
-      (is (not (clojure.string/includes? blob (String. ^bytes (:wrapped wrap) "ISO-8859-1"))))
-      (is (not (clojure.string/includes? blob (String. ^bytes (:salt wrap) "ISO-8859-1"))))
+      (is (not (kotoba.lang.text/includes? blob (String. ^bytes (:wrapped wrap) "ISO-8859-1"))))
+      (is (not (kotoba.lang.text/includes? blob (String. ^bytes (:salt wrap) "ISO-8859-1"))))
       (is (empty? (filter bytes? (tree-seq coll? seq (device/status meta))))
           "no byte array survives into the status at all"))
-    (is (clojure.string/includes? blob "mac-b"))))
+    (is (kotoba.lang.text/includes? blob "mac-b"))))

@@ -2,7 +2,7 @@
   "The wire contract, tested without a socket. `kagi.agent-client/sha256-bytes`
   is the portable digest, so these assertions mean the same thing on whichever
   runtime runs them."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest testing is]]
             [kagi.agent-client :as client]
             [kagi.agent-protocol :as proto]))

@@ -85,7 +85,7 @@
 
   ## `.cljc` with only a `:clj` branch, and saying so\n\n  This is the agent-side session: it opens a vault file, decapsulates a grant,\n  runs the governor and signs a ledger. All of that is JVM work and belongs\n  where the vault is, so the `:cljs` branch is empty rather than pretending.\n  The extension follows the rule that new production code is portable-first\n  (ADR-2608201300); the portable half of this surface already exists as\n  `kagi.agent-registry` and is guarded by `kagi.portable-slice-test`."
   #?@(:clj [(:require [clojure.java.io :as io]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [kagi.cacao :as cacao]
             [kagi.chain-signer :as chain-signer]
             [kagi.crypto :as crypto]

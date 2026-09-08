@@ -25,7 +25,7 @@
   ;; primitives. Only `copy-purpose` — the word this writes into the ledger —
   ;; is portable.
   #?(:clj
-     (:require [clojure.string :as str]
+     (:require [kotoba.lang.text :as str]
                [kagi.clipboard :as clipboard]
                [kagi.device :as device]
                [kagi.store :as store]

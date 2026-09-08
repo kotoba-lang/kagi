@@ -16,7 +16,7 @@
   ;; `clojure.string` is used only by the :cljs branch — required inside the
   ;; reader conditional so a JVM consumer neither loads it nor gets linted for
   ;; an unused require.
-  #?(:cljs (:require [clojure.string :as str]))
+  #?(:cljs (:require [kotoba.lang.text :as str]))
   #?(:clj (:import [java.util Base64])))
 
 (defn encode

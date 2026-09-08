@@ -1,7 +1,7 @@
 (ns kagi.ui-test
   "The renderer, against the two things it must never get wrong: showing a
   secret, and shipping a view nobody can reach."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kagi.ui :as ui]))
 
