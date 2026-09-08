@@ -8,7 +8,7 @@
 
   再生成: npm install && npm run test:cljs"
   (:require [clojure.java.io :as io]
-            [kotoba.lang.edn :as edn]
+            [clojure.edn :as edn]
             [clojure.test :refer [deftest is testing]]
             [kagi.crypto :as c])
   (:import [java.util Base64]))
