@@ -1,6 +1,6 @@
 (ns kagi.key-registry
   "Fail-closed key lifecycle metadata and use-time policy checks."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def states #{:preactive :active :decrypt-or-verify-only :revoked :destroyed})
 (def originator-ops #{:encrypt :sign :encapsulate :wrap})

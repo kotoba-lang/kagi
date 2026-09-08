@@ -1,6 +1,6 @@
 (ns kagi.cacao-test
   "自己発行 CACAO の mint→verify 往復・改竄検知・audience 照合。"
-  (:require [clojure.test :refer [deftest testing is]]
+  (:require [kotoba.lang.text] [clojure.test :refer [deftest testing is]]
             [kagi.cacao :as cacao]
             [kagi.identity :as identity]
             [ed25519.core :as ed25519])
@@ -121,7 +121,7 @@
     (let [[id tok] (apex-cacao)
           p (payload-of tok)
           scopes (->> (:resources p)
-                      (filter #(clojure.string/starts-with? % "kotoba://graph/"))
+                      (filter #(kotoba.lang.text/starts-with? % "kotoba://graph/"))
                       (map #(subs % (count "kotoba://graph/"))))]
       (is (seq scopes) "a mint with no graph scope at all is what shipped, and 401'd")
       (is (some #{(:did id)} scopes)))))

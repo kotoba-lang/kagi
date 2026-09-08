@@ -5,7 +5,7 @@
   not log returned values."
   (:require [clojure.edn :as edn]
             [clojure.java.shell :as sh]
-            [clojure.string :as str])
+            [kotoba.lang.text :as str])
   (:import [java.nio.charset StandardCharsets]
            [java.nio.file CopyOption Files LinkOption Path Paths StandardCopyOption]
            [java.nio.file.attribute FileAttribute PosixFilePermissions]))
@@ -21,7 +21,7 @@
   (let [s* (str/trim (str s))]
     (when-not (str/blank? s*)
       (if-let [[_ scheme body] (re-matches #"^([A-Za-z][A-Za-z0-9+.-]*)://(.+)$" s*)]
-        {:scheme (str/lower-case scheme) :body body :raw s*}
+        {:scheme (str/lower scheme) :body body :raw s*}
         {:scheme "keychain" :body s* :raw (str "keychain://" s*)}))))
 
 (defn redact-ref [s]

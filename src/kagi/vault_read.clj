@@ -29,7 +29,7 @@
   伴わないから: `items` はメタデータだけを返し、平文は `reveal` を明示的に
   呼んだ item にしか現れない。"
   (:require [clojure.edn :as edn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [kagi.cacao :as cacao]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]

@@ -37,7 +37,7 @@
   the socket, so this namespace only ever receives metadata, and
   `kagi.ui-test` asserts a plaintext handed to the renderer cannot come back
   out of it."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [jp-go-dds.core :as dds]
             [jp-go-dds.page :as dds-page]
             [jp-go-dds.tokens :as dds-tokens]))
@@ -160,9 +160,9 @@
   is the behaviour, not the branch: submitting the form with nothing typed
   must show the whole vault, never an empty one."
   [items q]
-  (let [q (str/lower-case (str/trim (str q)))]
+  (let [q (str/lower (str/trim (str q)))]
     (vec (filter (fn [it]
-                   (some #(str/includes? (str/lower-case (str %)) q)
+                   (some #(str/includes? (str/lower (str %)) q)
                          [(:item/id it)
                           (:item/compartment it)
                           (some-> (:item/category it) name)]))

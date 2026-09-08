@@ -47,7 +47,7 @@
   Keep `:account-key` and `:secret` somewhere a `kagi.secret-store` ref points
   at. Losing either means enrolling again: the vault kept only a hash of the
   token, and the private key was never sent."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kagi.agent-protocol :as proto]
             [kagi.b64 :as b64]
             [kagi.crypto :as crypto]

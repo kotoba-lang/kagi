@@ -34,7 +34,7 @@
   and it keeps the same trust model — the store holds ciphertext and the
   unlock secret never leaves the device."
   (:require [json.data-json :as json]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [kagi.cacao :as cacao]
             [kagi.crypto :as crypto]
             [kagi.persist :as persist])
@@ -75,7 +75,7 @@
   [{:keys [url method headers body]}]
   (let [b (HttpRequest/newBuilder (URI/create url))]
     (doseq [[k v] headers] (.header b k v))
-    (let [req  (-> b (.method (str/upper-case (name (or method :post)))
+    (let [req  (-> b (.method (str/upper (name (or method :post)))
                             (if body
                               (HttpRequest$BodyPublishers/ofString body)
                               (HttpRequest$BodyPublishers/noBody)))

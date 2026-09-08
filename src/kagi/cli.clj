@@ -25,7 +25,7 @@
     kagi whoami                     # 自分の did:key / IPNS graph"
   (:require [clojure.edn :as edn]
             [clojure.pprint :as pprint]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [langgraph.graph :as g]
             [kagi.operation :as op]
             [kagi.store :as store]

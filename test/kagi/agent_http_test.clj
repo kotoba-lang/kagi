@@ -6,7 +6,7 @@
   that the last step — turning released ciphertext into a secret — happens in
   the CLIENT. If the server ever started returning plaintext, this suite would
   keep passing only if the SDK also stopped decrypting, and it does not."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest testing is]]
             [kagi.agent :as agent]
             [kagi.agent-client :as client]

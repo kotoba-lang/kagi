@@ -55,7 +55,7 @@
 
   ## `.cljc` with only a `:clj` branch, and saying so\n\n  Everything below binds a socket through `com.sun.net.httpserver`, so the JVM\n  half is the only half that exists today. The file carries the portable\n  extension because the RULE is that new production code is portable-first\n  (ADR-2608201300), and because the split this needs is real rather than\n  cosmetic: routing, the challenge token shape and the response encoding are\n  host-independent, and `kagi.ui.server` is the worked example of separating\n  them in this repo. That separation is the remaining Worker-port work\n  (ADR-2608281100), and this comment is here so the extension does not claim\n  it has already happened."
   #?@(:clj [(:require [json.data-json :as json]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [clojure.walk :as walk]
             [kagi.agent-protocol :as proto]
             [kagi.agent-service :as service]
@@ -107,7 +107,7 @@
    x))
 
 (defn- render [accept value]
-  (if (str/includes? (str/lower-case (str accept)) "application/edn")
+  (if (str/includes? (str/lower (str accept)) "application/edn")
     ["application/edn; charset=utf-8" (persist/->edn value)]
     ;; `:escape-slash false`: JSON's optional `\/` escaping is legal and makes
     ;; every path in an error body unreadable (`\/v1\/t\/…`). Nothing here is
@@ -141,7 +141,7 @@
   cannot carry a tamper-evident log."
   [^HttpExchange exchange & [{:keys [max-bytes]}]]
   (let [limit (or max-bytes max-request-bytes)
-        edn? (str/includes? (str/lower-case
+        edn? (str/includes? (str/lower
                              (str (.getFirst (.getRequestHeaders exchange) "Content-Type")))
                             "application/edn")]
     (with-open [in (.getRequestBody exchange)

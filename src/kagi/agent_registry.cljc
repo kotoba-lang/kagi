@@ -21,7 +21,7 @@
   Reading and writing `registry.edn` — file locks and paths. A Worker reads the
   registry through `kagi.agent-docs` from an object store instead, so the file
   path was never the portable part."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kagi.agent-protocol :as proto]
             [kagi.b64 :as b64]
             [kagi.crypto :as crypto]
@@ -171,7 +171,7 @@
 
                (and (seq (str confirmed-fingerprint))
                     (get-in request [:agent/public :kem])
-                    (not= (str/upper-case (str confirmed-fingerprint))
+                    (not= (str/upper (str confirmed-fingerprint))
                           (pubkey/fingerprint (get-in request [:agent/public :kem]))))
                (conj {:rule :fingerprint-mismatch
                       :detail "request の KEM 公開鍵と読み上げられた fingerprint が一致しない —

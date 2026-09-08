@@ -7,7 +7,7 @@
   SIWE/wire ビルダは `kotoba.cacao` の byte-exact 純関数の写し(同期して保つ)。crypto は
   JDK Ed25519 + 最小 CBOR(definite-length)。"
   (:require [cacao.core :as shared]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [ed25519.core :as ed25519])
   (:import [java.security Signature MessageDigest]
            [java.io ByteArrayOutputStream]

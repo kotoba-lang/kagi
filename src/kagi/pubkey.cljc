@@ -16,7 +16,7 @@
   Neither is a second implementation of anything: the did:key alphabet and
   multicodec live in `org-ietf-ed25519` (already `.cljc`), and the digest in
   `kagi.digest`."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [ed25519.core :as ed25519]
             [kagi.b64 :as b64]
             [kagi.digest :as digest]))

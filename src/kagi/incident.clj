@@ -4,7 +4,7 @@
   rotation, restore and verification. Every completed step returns bounded
   evidence and receives a hybrid-signed receipt."
   (:require [cbor.core :as cbor]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [kagi.crypto :as crypto]))
 
 (def receipt-domain "kagi/incident-step-receipt/v1")

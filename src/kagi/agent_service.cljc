@@ -57,7 +57,7 @@
   cost a human a command.
 
   ## `.cljc` with only a `:clj` branch, and saying so\n\n  Most of this namespace is pure logic over the documents seam and could run\n  anywhere; what pins it to the JVM today is `kagi.vault-read` (for the vault\n  home) and the store it builds. Separating those is the remaining Worker-port\n  work (ADR-2608281100). The extension follows the portable-first rule\n  (ADR-2608201300) and this comment is here so it does not overclaim."
-  #?@(:clj [(:require [clojure.string :as str]
+  #?@(:clj [(:require [kotoba.lang.text :as str]
             [kagi.agent :as agent]
             [kagi.agent-docs :as docs]
             [kagi.agent-protocol :as proto]

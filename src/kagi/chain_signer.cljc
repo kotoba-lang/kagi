@@ -39,7 +39,7 @@
   boundary."
   (:require [btc-crypto.bip32 :as bip32]
             [btc-crypto.bip39 :as bip39]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [eth-crypto.core :as eth]
             #?(:clj [kagi.vault-read :as vault-read])
             [wallet.signer :as wsigner]))

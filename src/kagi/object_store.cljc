@@ -33,7 +33,7 @@
   rather than hidden in a default.
 
   ## `.cljc` with only a `:clj` branch, and saying so\n\n  This is host wiring by definition — a JDK HTTP client behind io-storj. The\n  browser/Worker equivalent is a `fetch`-based `IHttp` against the same\n  `storj.core`, which is a different implementation rather than the same one\n  compiled twice. The extension follows the portable-first rule\n  (ADR-2608201300) and this comment says which half is missing."
-  #?@(:clj [(:require [clojure.string :as str]
+  #?@(:clj [(:require [kotoba.lang.text :as str]
             [sigv4.crypto :as sigv4-crypto]
             [storj.core :as storj]
             [storj.protocols :as sp]
@@ -75,7 +75,7 @@
   sp/IHttp
   (-request [_ {:keys [method url headers body]}]
     (let [b (reduce (fn [acc [k v]]
-                      (if (jdk-restricted-headers (str/lower-case (str (name k))))
+                      (if (jdk-restricted-headers (str/lower (str (name k))))
                         acc
                         (.header ^HttpRequest$Builder acc (str (name k)) (str v))))
                     (HttpRequest/newBuilder (URI/create url))
@@ -83,7 +83,7 @@
           ;; storj.core signs the method it is going to send and hands it over
           ;; as an upper-case string; passing anything else here would sign one
           ;; request and send another.
-          req (.build (.method ^HttpRequest$Builder b (str/upper-case (name method))
+          req (.build (.method ^HttpRequest$Builder b (str/upper (name method))
                                (->body-publisher body)))
           resp (.send client req (HttpResponse$BodyHandlers/ofByteArray))]
       {:status (.statusCode resp)
