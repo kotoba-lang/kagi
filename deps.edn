@@ -104,7 +104,7 @@
   :witness {:main-opts ["-m" "kagi.witness-main"]}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
-                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd6605cb6c0efc275e1df1736f6e90d4d73"}
                       ;; TEST-ONLY. kagi's own runtime does not depend on
                       ;; io-storj: `store/object-sealed-block-store` takes the
                       ;; four functions, not a Storj client, so whoever wires
