@@ -6,7 +6,7 @@
   生成物なのでコミットする** — CLJS 側テストが JVM を起動せずに走れるようにするため。
 
   再生成:
-    clojure -M:test -m kagi.crypto.gen-interop-vectors"
+    kbb -M:test -m kagi.crypto.gen-interop-vectors"
   (:require [clojure.java.io :as io]
             [clojure.pprint]
             [kagi.crypto :as c])

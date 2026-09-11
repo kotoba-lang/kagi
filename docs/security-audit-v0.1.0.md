@@ -22,8 +22,8 @@ Status: ready for independent review; external audit not yet performed.
 
 ```bash
 java -version                 # JDK 24 is required
-clojure -M:test               # unit, contract and recovery-drill evidence
-clojure -M:lint               # static checks; zero warnings required
+kbb -M:test               # unit, contract and recovery-drill evidence
+kbb -M:lint               # static checks; zero warnings required
 ```
 
 Relevant focused tests: `crypto_test`, `governor_contract_test`, `store_contract_test`,

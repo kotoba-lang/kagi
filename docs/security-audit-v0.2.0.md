@@ -10,10 +10,10 @@ as an empty remote followed by push.
 Focused evidence:
 
 ```bash
-clojure -M:test -n kagi.recovery-test
-clojure -M:test -n kagi.sync-test
-clojure -M:test
-clojure -M:lint
+kbb -M:test -n kagi.recovery-test
+kbb -M:test -n kagi.sync-test
+kbb -M:test
+kbb -M:lint
 ```
 
 Known limitation: v0.2.0 exposes the threshold primitive to library consumers; a hardened

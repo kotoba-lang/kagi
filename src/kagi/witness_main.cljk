@@ -31,7 +31,7 @@
 
 (defn -main [& [config-path]]
   (when-not (seq config-path)
-    (throw (ex-info "usage: clojure -M:witness path/to/witness-config.edn" {})))
+    (throw (ex-info "usage: kbb -M:witness path/to/witness-config.edn" {})))
   (let [config (or (persist/load* config-path)
                    (throw (ex-info "witness config not found" {:path config-path})))
         {:keys [server endpoint]} (start-from-config! config)

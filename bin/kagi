@@ -3,4 +3,4 @@
 # PQC は JDK24 標準 provider を使うため bb ではなく clojure(full JDK)で実行する。
 # vault は実行ディレクトリの ./.kagi に置かれる。
 cd "$(dirname "$0")/.." || exit 1
-exec clojure -M:dev:cli "$@"
+exec kbb -M:dev:cli "$@"

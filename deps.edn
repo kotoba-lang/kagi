@@ -91,9 +91,9 @@
   :dev {:override-deps
         {io.github.kotoba-lang/langchain
          {:local/root "../langchain"}}}
-  ;; clojure -M:dev:run  → drive the demo ops through one VaultActor
+  ;; kbb -M:dev:run  → drive the demo ops through one VaultActor
   :run {:main-opts ["-m" "kagi.sim"]}
-  ;; clojure -M:dev:cli <cmd>  → op 相当の CLI(vault は ./.kagi)。bin/kagi も参照。
+  ;; kbb -M:dev:cli <cmd>  → op 相当の CLI(vault は ./.kagi)。bin/kagi も参照。
   ;; `kagi push --backend object` wires an S3-compatible object store, so the
   ;; CLI — the application doing the wiring — carries io-storj. The LIBRARY
   ;; still does not: `kagi.store` / `kagi.sync` take four functions and never
@@ -118,7 +118,7 @@
                       {:git/sha "daa038ba72fd515452d0f4091298568755a39ec9"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
-  ;; clojure -M:gen-vectors → JVM provider で cross-runtime 相互運用ベクタを再生成し
+  ;; kbb -M:gen-vectors → JVM provider で cross-runtime 相互運用ベクタを再生成し
   ;; test/fixtures/jvm-crypto-vectors.edn へ書く(kagi.crypto.noble のテストが読む)。
   :gen-vectors {:extra-paths ["test"]
                 :main-opts ["-m" "kagi.crypto.gen-interop-vectors"]}
