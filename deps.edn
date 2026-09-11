@@ -4,7 +4,7 @@
  ;; (ML-KEM-768 / ML-DSA-65 / SLH-DSA) are provided on the JVM by BouncyCastle via
  ;; JCA; Ed25519 + AES-256-GCM come from the JDK.
  ;;
- ;; The browser side is `src/kagi/crypto/noble.cljs` — pure-JS `@noble/*`, declared
+ ;; The browser side is `src/kagi/crypto/noble.cljk` — pure-JS `@noble/*`, declared
  ;; in package.json, NOT a Rust/WASM provider (this comment used to point at
  ;; kotoba-crypto Rust; no such provider was ever wired, and repo-wide policy
  ;; forbids adding new Rust). JVM consumers pulling this repo via :local/root or
