@@ -3,12 +3,12 @@
 
   自己往復だけでは足りない: 自己往復は「自分の決めた符号化で自分と話せる」しか示さず、
   JVM が封緘した item をブラウザで開けるかは何も保証しない。ここでは JVM が実際に
-  生成したベクタ(`test/fixtures/jvm-crypto-vectors.edn`、`clojure -M:gen-vectors` で再生成)
+  生成したベクタ(`test/fixtures/jvm-crypto-vectors.edn`、`kbb -M:gen-vectors` で再生成)
   を読んで、ブラウザ側が同じ平文・同じ DEK・同じ KDF 出力に到達することを確かめる。
 
   実行:
     npm install
-    npx nbb --classpath src:test -m kagi.crypto.noble-interop-test"
+    kbb --backend sci --classpath src:test -m kagi.crypto.noble-interop-test"
   (:require [cljs.test :refer [deftest is testing run-tests]]
             [clojure.edn :as edn]
             [kagi.crypto :as c]

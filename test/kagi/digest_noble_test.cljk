@@ -15,7 +15,7 @@
 
   実行:
     npm install
-    npx nbb --classpath src:test -m kagi.digest-noble-test"
+    kbb --backend sci --classpath src:test -m kagi.digest-noble-test"
   (:require [cljs.test :refer [deftest is run-tests]]
             [kagi.digest :as digest]))
 

@@ -6,7 +6,7 @@
     npm run test:reference
 
   Or:
-    nbb --classpath src:test:../org-nist-aes/src -m kagi.crypto.reference-aead-test"
+    kbb --backend sci --classpath src:test:../org-nist-aes/src -m kagi.crypto.reference-aead-test"
   (:require [cljs.test :refer [deftest is testing run-tests]]
             [kagi.crypto :as c]
             [kagi.crypto.noble :as noble]

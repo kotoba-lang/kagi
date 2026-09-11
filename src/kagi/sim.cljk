@@ -1,6 +1,6 @@
 (ns kagi.sim
   "デモドライバ。1 つの VaultActor に複数 op を通し、Governor verdict と台帳を見せる。
-  実行: clojure -M:dev:run"
+  実行: kbb -M:dev:run"
   (:require [langgraph.graph :as g]
             [kagi.operation :as op]
             [kagi.store :as store]

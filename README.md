@@ -65,8 +65,8 @@ item 平文・鍵はサーバに出ない（client-side E2E、zero-knowledge）�
 ```sh
 npm install
 npm run test:cljs      # nbb。JVM が封緘した item/share/署名をブラウザ側が処理できるか
-clojure -M:gen-vectors # 相互運用ベクタを JVM から再生成
-clojure -M:test -n kagi.crypto.noble-reverse-test  # 逆方向（ブラウザ→JVM）
+kbb -M:gen-vectors # 相互運用ベクタを JVM から再生成
+kbb -M:test -n kagi.crypto.noble-reverse-test  # 逆方向（ブラウザ→JVM）
 ```
 
 相互運用は**両方向**を実ベクタで検証している。片方向だけだと、ブラウザが「自分だけが
@@ -153,7 +153,7 @@ bin/kagi pull                         # cloud の最新 snapshot を取得（loc
 bin/kagi sync                         # pull後のremote seq一致時だけpush（競合はfail-closed）
 ```
 
-- `bin/kagi` は `clojure -M:dev:cli` のラッパ（PQC は JDK24 標準 provider を使うため bb 不可）。
+- `bin/kagi` は `kbb -M:dev:cli` のラッパ（PQC は JDK24 標準 provider を使うため bb 不可）。
 - master passphrase は環境変数 **`KAGI_MASTER`** か端末プロンプト。`unlock-enable-keychain`
   後は device-local OS keychain unlock を先に試し、passphrase は recovery として残す。
 - 保存先は **`$KAGI_HOME`（既定 `~/.kagi`、repo 外）**（ADR-2607170500、2026-07-17）:
@@ -556,10 +556,10 @@ KEK にする。PRF 非対応環境では OS keychain unlock と passphrase reco
 ## 開発
 
 ```bash
-clojure -M:lint           # clj-kondo（errors fail）
-clojure -M:test           # contract tests
-clojure -M:dev:run        # デモ（actor 直叩き）
-clojure -M:dev:cli <cmd>  # CLI（bin/kagi と同じ）
+kbb -M:lint           # clj-kondo（errors fail）
+kbb -M:test           # contract tests
+kbb -M:dev:run        # デモ（actor 直叩き）
+kbb -M:dev:cli <cmd>  # CLI（bin/kagi と同じ）
 ```
 
 > **状態**: JVM provider(`jvm-provider`)は **実 PQC を配線済み** — JDK 24 標準の
