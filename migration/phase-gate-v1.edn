@@ -1,6 +1,6 @@
 {:schema "kotoba-kagi-phase-migration/v1"
  :profile :kagi/phase-gate-v1
- :legacy {:gate "src/kagi/phase.cljc" :vault-ops "src/kagi/vault.cljc"
+ :legacy {:gate "src/kagi/phase.cljk" :vault-ops "src/kagi/vault.cljk"
           :status :retained-oracle}
  :canonical {:gate "src/kagi/phase.kotoba"
              :conformance "test/kagi/phase_conformance.kotoba"}
