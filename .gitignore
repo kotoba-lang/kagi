@@ -8,3 +8,6 @@
 target/
 .nrepl-port
 node_modules/
+
+# kbb engine cache (nbb.edn dep resolution)
+.nbb/
