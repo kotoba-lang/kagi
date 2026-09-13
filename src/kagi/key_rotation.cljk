@@ -1,7 +1,8 @@
 (ns kagi.key-rotation
   "Concrete identity-signing and recipient-KEM epoch workers. Plans are pure
   until their signed event passes durable rotation admission."
-  (:require [kagi.crypto :as crypto]
+  (:require [kagi.digest :as digest]
+            [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.key-registry :as registry]
             [kagi.persist :as persist]
@@ -76,7 +77,7 @@
         now (Instant/now)
         base (registry/key-record
               {:id (str "kem:" (.encodeToString (.withoutPadding (java.util.Base64/getUrlEncoder))
-                                                  (crypto/sha256 (:pq (:public pair)))))
+                                                  (digest/sha256-bytes (:pq (:public pair)))))
                :purpose :recipient-kem :suite :kem-v1 :epoch (inc (:key/epoch old-key))
                :created-at (str now) :not-before (str now)
                :originator-not-after (str (.plus now 90 ChronoUnit/DAYS))

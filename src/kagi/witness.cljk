@@ -1,6 +1,7 @@
 (ns kagi.witness
   "Signed Merkle checkpoints and split-view detection for rotation DAG gossip."
-  (:require [cbor.core :as cbor]
+  (:require [kagi.digest :as digest]
+            [cbor.core :as cbor]
             [kagi.crypto :as crypto]
             [kagi.recovery :as recovery])
   (:import [java.util Base64]))
@@ -10,7 +11,7 @@
 (declare merge-gossip)
 
 (defn- hash-pair ^bytes [^bytes left ^bytes right]
-  (crypto/sha256 (byte-array (concat (seq left) (seq right)))))
+  (digest/sha256-bytes (byte-array (concat (seq left) (seq right)))))
 
 (defn- decode-id ^bytes [id]
   (.decode (Base64/getUrlDecoder) ^String id))
@@ -20,7 +21,7 @@
   [ids]
   (loop [level (mapv decode-id (sort ids))]
     (cond
-      (empty? level) (crypto/sha256 (byte-array 0))
+      (empty? level) (digest/sha256-bytes (byte-array 0))
       (= 1 (count level)) (first level)
       :else (recur (mapv (fn [[a b]] (hash-pair a (or b a)))
                           (partition-all 2 level))))))
@@ -42,14 +43,14 @@
                         :event-ids ids
                         :root (b64url (merkle-root ids))
                         :previous previous-id}
-        id (b64url (crypto/sha256 (checkpoint-bytes cp)))
+        id (b64url (digest/sha256-bytes (checkpoint-bytes cp)))
         with-id (assoc cp :checkpoint/id id)]
     (assoc with-id :checkpoint/signature
            (crypto/sign-with p signer (checkpoint-bytes with-id)))))
 
 (defn valid-checkpoint? [p cp witness-public]
   (let [unsigned (dissoc cp :checkpoint/signature :checkpoint/id)
-        expected (b64url (crypto/sha256 (checkpoint-bytes unsigned)))
+        expected (b64url (digest/sha256-bytes (checkpoint-bytes unsigned)))
         ids (:checkpoint/event-ids cp)]
     (and (= checkpoint-domain (:checkpoint/domain cp))
          (pos-int? (:checkpoint/seq cp))

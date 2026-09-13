@@ -1,7 +1,8 @@
 (ns kagi.recovery
   "Shamir threshold recovery for random VMKs over GF(256). Shares contain no
   usable VMK alone and carry a set id plus SHA-256 digest for mix-up/tamper detection."
-  (:require [cbor.core :as cbor]
+  (:require [kagi.digest :as digest]
+            [cbor.core :as cbor]
             [kagi.crypto :as crypto])
   (:import [java.util Base64 UUID]))
 
@@ -33,7 +34,7 @@
   (when-not (and (pos-int? k) (<= 2 k n 255))
     (throw (ex-info "invalid recovery threshold" {:threshold k :shares n})))
   (let [set-id (str (UUID/randomUUID))
-        digest (crypto/sha256 secret)
+        digest (digest/sha256-bytes secret)
         polys (mapv (fn [b]
                       (into [(bit-and b 0xff)]
                             (map #(bit-and % 0xff) (crypto/rand-bytes p (dec k)))))
@@ -72,7 +73,7 @@
                                                  (gf-mul acc (gf-div xj (bit-xor xj xi)))))
                                            1 indexes)]
                                 (gf-mul (bit-and (aget ^bytes value offset) 0xff) basis))))))]
-      (when-not (= (seq (crypto/sha256 secret)) (seq (:recovery/digest first-share)))
+      (when-not (= (seq (digest/sha256-bytes secret)) (seq (:recovery/digest first-share)))
         (throw (ex-info "recovery share integrity check failed" {})))
       secret)))
 
@@ -108,7 +109,7 @@
         missing (->> resolved (filter (comp nil? val)) (map key) set)
         fingerprints (map (fn [[_ public]]
                             (.encodeToString (.withoutPadding (Base64/getUrlEncoder))
-                                             (crypto/sha256 (cbor/encode public))))
+                                             (digest/sha256-bytes (cbor/encode public))))
                           resolved)]
     (when (seq missing)
       (throw (ex-info (str label " policy has unresolved members") {:members missing})))

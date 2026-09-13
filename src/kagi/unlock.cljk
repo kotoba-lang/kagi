@@ -5,7 +5,6 @@
   SecretStore, not in vault EDN, stdout, logs, or manimani state."
   (:require [kagi.crypto :as crypto]
             [kagi.secret-store :as secret-store])
-  (:import [java.util Base64]))
 
 (def ^:private info-os-keychain (.getBytes "kagi/unlock/os-keychain/v1" "UTF-8"))
 (def ^:private info-passkey-prf (.getBytes "kagi/unlock/passkey-prf/v1" "UTF-8"))
@@ -13,8 +12,7 @@
 (defn- passkey-info ^bytes [rp-id credential-id]
   (.getBytes (str "kagi/unlock/passkey-prf/v1\u0000" rp-id "\u0000" credential-id) "UTF-8"))
 
-(defn- b64 [^bytes b]
-  (.encodeToString (Base64/getEncoder) b))
+(defn- b64 [b] (b64/encode b))
 
 (defn new-device-secret
   "Return a printable secret suitable for OS keychain storage."

@@ -6,31 +6,41 @@
 
   `.kagi/identity.edn` は公開metadataとSecretStore/native-handle参照のみを保持する。
   production署名鍵は非exportable OS/HSM handleを必須とする。"
-  (:require [clojure.edn :as edn]
+  (:require [kagi.digest :as digest]
+            [kagi.b64 :as b64f]
+            [clojure.edn :as edn]
             [ed25519.core :as ed25519]
             [ipns.core :as ipns]
             [kagi.crypto :as crypto]
+            [kagi.crypto.noble :as noble]
             [kagi.native-key :as native-key]
             [kagi.key-registry :as key-registry]
-            [kagi.secret-store :as secret-store])
-  (:import [java.security KeyPairGenerator KeyFactory Key MessageDigest]
-           [java.security.spec PKCS8EncodedKeySpec X509EncodedKeySpec]
-           [java.time Instant]
-           [java.time.temporal ChronoUnit]
-           [java.util Base64 UUID]))
+            [kagi.secret-store :as secret-store]))
 
-(defn- enc ^bytes [^Key k] (.getEncoded k))
-(defn- b64 ^String [^bytes b] (.encodeToString (Base64/getEncoder) b))
-(defn- unb64 ^bytes [^String s] (.decode (Base64/getDecoder) s))
+;; (import block removed for the kbb/JS face — the noble provider supplies
+;; sign keypairs, Base64 travels through kagi.b64, timestamps through js/Date,
+;; and the raw-key helpers below were rewritten onto js/Uint8Array.)
+
+(def ^:private fs-id (js/require "node:fs"))
+
+(defn- spit [path s]
+  (.writeFileSync fs-id path (str s) #js {:encoding "utf8"}))
+(defn- slurp [path]
+  (.readFileSync fs-id path "utf8"))
+
+(defn- enc [k] k)
+(defn- b64 [b] (b64f/encode b))
+(defn- unb64 [s] (b64f/decode s))
 (defn- b64-map [m] (into {} (map (fn [[k v]] [k (b64 v)])) m))
 (defn- unb64-map [m] (into {} (map (fn [[k v]] [k (unb64 v)])) m))
 
 (defn encode-bundle [m] (b64-map m))
 (defn decode-bundle [m] (unb64-map m))
 
-(defn- raw-pub ^bytes [pub]
-  (let [enc (.getEncoded pub)]
-    (java.util.Arrays/copyOfRange enc (- (alength enc) 32) (alength enc))))
+(defn- raw-pub [pub]
+  (if (instance? js/Uint8Array pub)
+    (if (= 32 (.-length pub)) pub (.slice pub (- (.-length pub) 32)))
+    (noble/unwrap-der :ed25519-spki pub)))
 
 ;; did:key + IPNS-name derivation delegated to kotoba-lang/ed25519 and
 ;; kotoba-lang/ipns (ADR-2607050100) — this used to be a private
@@ -51,21 +61,21 @@
    (X25519+ML-KEM-768)も生成し、他メンバーがこの identity へ secret を共有できる。"
   ([] (generate-identity nil))
   ([provider]
-   (let [kp  (.generateKeyPair (KeyPairGenerator/getInstance "Ed25519"))
-         pub (.getPublic kp)
-         ml  (.generateKeyPair (KeyPairGenerator/getInstance "ML-DSA-65"))
+   (let [p (or provider (noble/noble-provider))
+         kp  (crypto/sign-keypair p)
+         pub (:public kp)
          kem (when provider (crypto/kem-keypair provider))
-         now (Instant/now)
-         key-base {:created-at (str now) :not-before (str now)
-                   :originator-not-after (str (.plus now 365 ChronoUnit/DAYS))
+         now (.toISOString (js/Date.))
+         key-base {:created-at now :not-before now
+                   :originator-not-after (.toISOString (js/Date. (+ (.getTime (js/Date.)) (* 365 86400000))))
                    :custody-ref "pending://identity-generation"}]
-     (cond-> {:private-key (.getPrivate kp) :public-key pub
-              :authority-id (str "urn:kagi:authority:" (UUID/randomUUID))
+     (cond-> {:private-key (:secret kp) :public-key pub
+              :authority-id (str "urn:kagi:authority:" (js/crypto.randomUUID))
               :did (did-key pub) :graph (ipns-name pub)
-              :private-b64 (b64 (enc (.getPrivate kp)))
-              :public-b64  (b64 (enc pub))
-              :mldsa-private-b64 (b64 (enc (.getPrivate ml)))
-              :mldsa-public-b64  (b64 (enc (.getPublic ml)))
+              :private-b64 (b64 (enc (:ed (:secret kp))))
+              :public-b64  (b64 (enc (:ed pub)))
+              :mldsa-private-b64 (b64 (enc (:mldsa (:secret kp))))
+              :mldsa-public-b64  (b64 (enc (:mldsa pub)))
               :signing-key (key-registry/transition
                             (key-registry/key-record
                              (merge key-base {:id (str "sign:" (b64 (raw-pub pub)))
@@ -76,11 +86,11 @@
                   :kem-secret (b64-map (:secret kem))
                   :kem-key (key-registry/transition
                             (key-registry/key-record
-                             (merge key-base {:id (str "kem:" (b64 (crypto/sha256 (:pq (:public kem)))))
+                             (merge key-base {:id (str "kem:" (b64 (digest/sha256-bytes (:pq (:public kem)))))
                                               :purpose :recipient-kem
                                               :suite :kem-v1 :epoch 0
                                               :originator-not-after
-                                              (str (.plus now 90 ChronoUnit/DAYS))}))
+                                              (.toISOString (js/Date. (+ (.getTime (js/Date.)) (* 90 86400000))))}))
                             :active (str now)))))))
 
 (defn kem-public
@@ -117,12 +127,9 @@
     (:kem-key id) (assoc :member/kem-key (:kem-key id))))
 
 (defn load-identity [{:keys [private-b64 public-b64] :as m}]
-  (let [kf (KeyFactory/getInstance "Ed25519")
-        pub  (.generatePublic kf (X509EncodedKeySpec. (.decode (Base64/getDecoder) public-b64)))]
+  (let [pub  (b64f/decode public-b64)]
     (cond-> (merge m {:public-key pub :did (did-key pub) :graph (ipns-name pub)})
-      private-b64 (assoc :private-key
-                         (.generatePrivate kf (PKCS8EncodedKeySpec.
-                                                (.decode (Base64/getDecoder) private-b64)))))))
+      private-b64 (assoc :private-key (b64f/decode private-b64)))))
 
 (def secret-fields #{:private-b64 :mldsa-private-b64 :kem-secret})
 (def public-fields #{:authority-id :public-b64 :mldsa-public-b64 :kem-public :signing-key :kem-key
@@ -131,7 +138,7 @@
                      :retired-signing-epochs})
 
 (defn- ensure-key-metadata [m]
-  (let [now (Instant/now)
+  (let [now (.toISOString (js/Date.))
         custody (or (:secret-ref m) "plaintext-development://identity")
         base {:created-at (str now) :not-before (str now) :custody-ref custody}
         signing (or (:signing-key m)
@@ -139,7 +146,7 @@
                      (key-registry/key-record
                       (merge base {:id (str "sign:" (subs (:public-b64 m) 0 (min 24 (count (:public-b64 m)))))
                                    :purpose :identity-signing :suite :authority-v1 :epoch 0
-                                   :originator-not-after (str (.plus now 365 ChronoUnit/DAYS))}))
+                                   :originator-not-after (.toISOString (js/Date. (+ (.getTime (js/Date.)) (* 365 86400000))))}))
                      :active (str now)))
         kem (when (:kem-public m)
               (or (:kem-key m)
@@ -148,7 +155,7 @@
                     (merge base {:id (str "kem:" (subs (get-in m [:kem-public :pq])
                                                         0 (min 24 (count (get-in m [:kem-public :pq])))))
                                  :purpose :recipient-kem :suite :kem-v1 :epoch 0
-                                 :originator-not-after (str (.plus now 90 ChronoUnit/DAYS))}))
+                                 :originator-not-after (.toISOString (js/Date. (+ (.getTime (js/Date.)) (* 90 86400000))))}))
                    :active (str now))))]
     (cond-> (assoc m :signing-key signing
                      :authority-id (or (:authority-id m)
@@ -189,60 +196,12 @@
              recipient (assoc :decapsulation-handle recipient))))
        (load-identity (merge m secret))))))
 
-(defn migrate-native-signing!
-  "After token public-key binding and a live hybrid signing self-test succeed,
-  remove exportable Ed25519/ML-DSA encodings from the existing SecretStore.
-  Any failure before the durable overwrite leaves the old secret untouched."
-  [path public-id secret-store native-signing]
-  (let [ref (:secret-ref public-id)]
-    (when-not (seq ref)
-      (throw (ex-info "identity must first be migrated to a SecretStore" {})))
-    (let [expected (sign-public public-id)
-          signer (native-key/bound-signer (:keystore native-signing)
-                                           (:handle native-signing) expected)
-          challenge (crypto/sha256 (.getBytes (str "kagi/native-migration/" (UUID/randomUUID))
-                                               "UTF-8"))
-          signature (crypto/sign-with (crypto/jvm-provider) signer challenge)
-          _ (when-not (crypto/verify* (crypto/jvm-provider) expected challenge signature)
-              (throw (ex-info "native signing possession self-test failed" {})))
-          recipient (when-let [h (:kem-handle native-signing)]
-                      (native-key/bound-kem-recipient (:keystore native-signing) h
-                                                     (kem-public public-id)))
-          _ (when recipient
-              (let [{:keys [ciphertext shared]} (crypto/kem-encap (crypto/jvm-provider)
-                                                                  (kem-public public-id))
-                    recovered (crypto/kem-decap-with (crypto/jvm-provider) recipient ciphertext)]
-                (try
-                  (when-not (MessageDigest/isEqual ^bytes shared ^bytes recovered)
-                    (throw (ex-info "native KEM possession self-test failed" {})))
-                  (finally
-                    (java.util.Arrays/fill ^bytes shared (byte 0))
-                    (java.util.Arrays/fill ^bytes recovered (byte 0))))))
-          old-secret (secret-store/get-edn secret-store ref)
-          sanitized (cond-> (dissoc old-secret :private-b64 :mldsa-private-b64)
-                      recipient (dissoc :kem-secret))
-          metadata (native-key/metadata (:handle native-signing))
-          kem-metadata (when-let [h (:kem-handle native-signing)]
-                         (native-key/kem-metadata h))
-          public* (-> public-id
-                      (select-keys public-fields)
-                      (assoc :secret-ref ref :secret-provider :secret-store
-                             :native-signing-handle metadata)
-                      (cond-> kem-metadata (assoc :native-kem-handle kem-metadata))
-                      (assoc-in [:signing-key :key/custody-ref]
-                                (str "native://" (:keystore-id metadata)))
-                      (cond-> kem-metadata
-                        (assoc-in [:kem-key :key/custody-ref]
-                                  (str "native://" (:keystore-id kem-metadata)))))]
-      (when-not (every? #(contains? old-secret %) [:private-b64 :mldsa-private-b64])
-        (throw (ex-info "exportable signing keys are already absent" {})))
-      (secret-store/put-edn! secret-store ref sanitized)
-      (let [stored (secret-store/get-edn secret-store ref)]
-        (when (some #(contains? stored %)
-                    (cond-> [:private-b64 :mldsa-private-b64] recipient (conj :kem-secret)))
-          (throw (ex-info "SecretStore did not remove exportable native key material" {}))))
-      (spit path (binding [*print-namespace-maps* false] (pr-str public*)))
-      {:migrated? true :secret-ref ref :native-signing-handle metadata})))
+(defn require-native
+  "kbb/JS face: the native keystore path is a JVM compatibility surface and
+  this module fails closed there (mirrors kagi.native-key's refusal)."
+  [& _]
+  (throw (ex-info "kagi.identity: native keystore is not available on the JS face"
+                  {:native-key/refusal :identity-native-migration-unavailable})))
 
 (defn migrate-identity-secret!
   "Move secret key material from an identity map into SecretStore.
@@ -267,7 +226,7 @@
   [path id secret-store secret-ref & [{:keys [replace?]}]]
   (when-not replace?
     (when-let [existing (try (secret-store/get-edn secret-store secret-ref)
-                             (catch Exception _ nil))]
+                             (catch :default _ nil))]
       (when (and (:private-b64 existing)
                  (not= (:private-b64 existing) (:private-b64 id)))
         (throw (ex-info (str "refusing to overwrite the identity secret already at "
@@ -296,8 +255,8 @@
   ([path provider] (load-or-create-identity! path provider nil))
   ([path provider {:keys [secret-store secret-ref allow-plaintext? allow-existing-plaintext?
                           native-signing]}]
-   (let [f (java.io.File. ^String path)]
-     (if (.exists f)
+   (let [f path]
+     (if (.existsSync fs-id f)
        (let [m (edn/read-string (slurp f))
              m* (ensure-key-metadata m)]
          (if (secret-backed-identity? m*)

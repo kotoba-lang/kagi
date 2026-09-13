@@ -33,7 +33,8 @@
   so vault persistence does not have to wait on that provisioning decision,
   and it keeps the same trust model — the store holds ciphertext and the
   unlock secret never leaves the device."
-  (:require [json.data-json :as json]
+  (:require [kagi.digest :as digest]
+            [json.data-json :as json]
             [kotoba.lang.text :as str]
             [kagi.cacao :as cacao]
             [kagi.crypto :as crypto]
@@ -281,7 +282,7 @@
   [prefix did cid]
   (str (or prefix default-prefix) did "/blocks/"
        (str/join (map #(format "%02x" (bit-and % 0xff))
-                      (crypto/sha256 (.getBytes ^String (str cid) "UTF-8"))))))
+                      (digest/sha256-bytes (.getBytes ^String (str cid) "UTF-8"))))))
 
 (defn object-put-block!
   "Store one item's ciphertext under its own key.

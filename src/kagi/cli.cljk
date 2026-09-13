@@ -30,6 +30,7 @@
             [kagi.operation :as op]
             [kagi.store :as store]
             [kagi.crypto :as crypto]
+            [kagi.crypto.noble :as noble]
             [kagi.cacao :as cacao]
             [kagi.ledger :as ledger]
             [kagi.identity :as identity]
@@ -52,11 +53,7 @@
             [kagi.ui.server :as ui-server]
             [kagi.sync :as sync]
             [kagi.import.onepassword :as import-1p]
-            [kagitaba.category :as kcat])
-  (:import [java.time Instant]
-           [java.awt Desktop Desktop$Action]
-           [java.net URI]
-           [java.util UUID]))
+            [kagitaba.category :as kcat]))
 
 ;; Vault home resolution (ADR-2607170500). The vault MUST NOT live in a repo
 ;; checkout / per-agent worktree: those get cleaned, re-cloned, or clobbered by
@@ -68,26 +65,39 @@
 ;;      to the canonical home on first use so nothing is silently lost.
 (def ^:private legacy-dir ".kagi")
 
+(def fs (js/require "node:fs"))
+(def node-path (js/require "node:path"))
+
+(defn- kagi.cli-env [k] (aget (.-env js/process) k))
+(defn- kagi.cli-prop [k]
+  (if (= k "user.home") (.homedir (js/require "node:os")) nil))
+
+(defn- now-iso8601 []
+  (.toISOString (js/Date.)))
+
+(defn- now-plus-3600-iso8601 []
+  (.toISOString (js/Date. (+ (.getTime (js/Date.)) 3600000))))
+
+(defn- random-uuid-str []
+  (js/crypto.randomUUID))
+
 (defn- home-dir []
-  (or (not-empty (System/getenv "KAGI_HOME"))
-      (str (System/getProperty "user.home") "/.kagi")))
+  (or (not-empty (kagi.cli-env "KAGI_HOME"))
+      (str (kagi.cli-prop "user.home") "/.kagi")))
 
 (defn- migrate-legacy!
   "One-time: if the canonical home has no vault but a legacy ./.kagi vault
   exists, COPY it up (not move — a concurrent session may still hold the legacy
   checkout) so the canonical home becomes authoritative without data loss."
   [home]
-  (let [home-vault   (java.io.File. (str home "/vault.edn"))
-        legacy-vault (java.io.File. (str legacy-dir "/vault.edn"))]
-    (when (and (not (.exists home-vault)) (.exists legacy-vault))
-      (.mkdirs (java.io.File. ^String home))
+  (let [home-vault   (str home "/vault.edn")
+        legacy-vault (str legacy-dir "/vault.edn")]
+    (when (and (not (.existsSync fs home-vault)) (.existsSync fs legacy-vault))
+      (.mkdirSync fs home #js {:recursive true})
       (doseq [f ["vault.edn" "identity.edn"]]
-        (let [src (java.io.File. (str legacy-dir "/" f))]
-          (when (.exists src)
-            (java.nio.file.Files/copy (.toPath src)
-                                      (.toPath (java.io.File. (str home "/" f)))
-                                      (into-array java.nio.file.CopyOption
-                                                  [java.nio.file.StandardCopyOption/COPY_ATTRIBUTES])))))
+        (let [src (str legacy-dir "/" f)]
+          (when (.existsSync fs src)
+            (.copyFileSync fs src (str home "/" f)))))
       (binding [*out* *err*]
         (println "kagi: migrated legacy ./.kagi vault ->" home
                  "(canonical). The in-repo ./.kagi is now deprecated; its copy remains untouched.")))))
@@ -102,24 +112,18 @@
 (def ^:private default-identity-ref "keychain://com.junkawasaki.kagi/identity")
 (def ^:private default-unlock-ref "keychain://com.junkawasaki.kagi/vmk-unlock")
 
-(defn- die [& msg] (binding [*out* *err*] (apply println msg)) (System/exit 1))
+(defn- die [& msg] (binding [*out* *err*] (apply println msg)) (js/process.exit 1))
 
 (defn- passphrase [confirm?]
-  (or (System/getenv "KAGI_MASTER")
-      (if-let [c (System/console)]
-        (let [a (String. (.readPassword c "master passphrase: " (object-array 0)))]
-          (when confirm?
-            (let [b (String. (.readPassword c "confirm: " (object-array 0)))]
-              (when-not (= a b) (die "passphrase mismatch"))))
-          a)
-        (do
-          (binding [*out* *err*] (print "master passphrase: ") (flush))
-          (or (read-line)
-              (die "KAGI_MASTER required in non-interactive mode"))))))
+  (or (kagi.cli-env "KAGI_MASTER")
+      (do
+        (binding [*out* *err*] (print "master passphrase: ") (flush))
+        (or (read-line)
+            (die "KAGI_MASTER required in non-interactive mode")))))
 
 (defn- identity-options []
-  (let [ref (or (not-empty (System/getenv "KAGI_IDENTITY_REF"))
-                (when (= "keychain" (System/getenv "KAGI_IDENTITY_STORE"))
+  (let [ref (or (not-empty (kagi.cli-env "KAGI_IDENTITY_REF"))
+                (when (= "keychain" (kagi.cli-env "KAGI_IDENTITY_STORE"))
                   default-identity-ref))]
     (when ref
       {:secret-ref ref
@@ -142,9 +146,9 @@
        (catch Exception _ (die "wrong passphrase (VMK unlock failed)"))))
 
 (defn- unlock-vmk-auto [p meta]
-  (if-let [pass (System/getenv "KAGI_MASTER")]
+  (if-let [pass (kagi.cli-env "KAGI_MASTER")]
     (unlock-vmk p pass meta)
-    (or (unlock/unlock-with-os-keychain p meta (not-empty (System/getenv "KAGI_UNLOCK_REF")))
+    (or (unlock/unlock-with-os-keychain p meta (not-empty (kagi.cli-env "KAGI_UNLOCK_REF")))
         (unlock-vmk p (passphrase false) meta))))
 
 ;; ───────── vault / actor ─────────
@@ -164,8 +168,8 @@
 
 (defn- self-cacao [id]
   (cacao/mint id {:cap :cap/admin :scope (:graph id)}
-              {:aud aud :nonce (str (UUID/randomUUID))
-               :issued-at (str (Instant/now)) :expiry (str (.plusSeconds (Instant/now) 3600))}))
+              {:aud aud :nonce (random-uuid-str)
+               :issued-at (now-iso8601) :expiry (now-plus-3600-iso8601)}))
 
 (defn- context [id vmk purpose]
   ;; `:now` is not decoration: `do-effect` stamps `:item/key-created-at` with
@@ -173,7 +177,7 @@
   ;; `key-registry/authorize!` fails closed without a current time, which is
   ;; what `:share/grant` needs to check a recipient's KEM key lifecycle.
   {:did (:did id) :role :owner :phase 3 :vmk vmk :purpose purpose
-   :now (str (Instant/now))
+   :now (now-iso8601)
    :aud aud :cacao (self-cacao id) :register (identity/member-record id :owner)})
 
 (defn- run-op! [p id store vmk req purpose]
@@ -229,8 +233,8 @@
   []
   (try
     ((requiring-resolve 'kagi.object-store/from-env)
-     {:prefix (not-empty (System/getenv "KAGI_OBJECT_PREFIX"))})
-    (catch java.io.FileNotFoundException _
+     {:prefix (not-empty (kagi.cli-env "KAGI_OBJECT_PREFIX"))})
+    (catch :default _
       (die (str "object backend needs io-storj on the classpath — run through "
                 "bin/kagi (the :cli alias carries it)")))))
 
@@ -249,7 +253,7 @@
   backend exists, and why it is preferred when configured."
   [args]
   (let [asked (or (not-empty (arg-val args "--backend"))
-                  (not-empty (System/getenv "KAGI_SYNC_BACKEND")))]
+                  (not-empty (kagi.cli-env "KAGI_SYNC_BACKEND")))]
     (case (or asked "auto")
       "kotobase" {:backend :kotobase}
       "object" (or (some-> (object-backend) (assoc :backend :object))
@@ -301,7 +305,7 @@
   Only these five fields are ever written. There is no path by which a secret
   reaches this function: it is not passed one."
   [path {:keys [item compartment category did now]}]
-  (let [existing (if (.exists (java.io.File. ^String path))
+  (let [existing (if (.existsSync fs path)
                    (let [v (edn/read-string (slurp path))]
                      (if (map? v) v
                          (throw (ex-info "record target is not a map" {:path path}))))
@@ -321,7 +325,7 @@
                   (println ";; kagi credential references — NO SECRET VALUES.")
                   (println ";; Written by `kagi add --record`. Safe to commit.")
                   (pprint/pprint merged))))
-    (.renameTo (java.io.File. tmp) (java.io.File. ^String path))
+    (.renameSync fs tmp path)
     record))
 
 (defn- cmd-add [p id args]
@@ -359,7 +363,7 @@
             (let [r (record-reference! record-path
                                        {:item name :compartment comp
                                         :category cat :did (:did id)
-                                        :now (str (Instant/now))})]
+                                        :now (now-iso8601)})]
               (println "recorded" (:credential/item r) "->" record-path))))))))
 
 (defn- cmd-get [p id args]
@@ -445,7 +449,7 @@
                                       :secret? false)))
               ;; Nonzero on anything but :match, so a caller can gate on it
               ;; rather than reading the verdict by eye.
-              (when-not (:ok? out) (System/exit 1)))))))))
+              (when-not (:ok? out) (js/process.exit 1)))))))))
 
 (defn- cmd-ls []
   (let [data (or (persist/load* vault-path) (die "no vault — run: kagi init"))]
@@ -501,7 +505,7 @@
 
 (defn- cmd-identity-migrate [_p id args]
   (let [ref (or (arg-val args "--ref")
-                (not-empty (System/getenv "KAGI_IDENTITY_REF"))
+                (not-empty (kagi.cli-env "KAGI_IDENTITY_REF"))
                 default-identity-ref)
         raw (persist/load* id-path)]
     (when-not raw (die "no identity at" id-path))
@@ -514,7 +518,7 @@
 
 (defn- cmd-unlock-enable-keychain [p _id args]
   (let [ref (or (arg-val args "--ref")
-                (not-empty (System/getenv "KAGI_UNLOCK_REF"))
+                (not-empty (kagi.cli-env "KAGI_UNLOCK_REF"))
                 default-unlock-ref)
         data (or (persist/load* vault-path) (die "no vault — run: kagi init"))
         pass (passphrase false)
@@ -642,9 +646,9 @@
     (if (= :object (:backend backend))
       (agent-docs/object-docs {:fns (:fns backend)
                                :did (or (not-empty (arg-val args "--did"))
-                                        (not-empty (System/getenv "KAGI_AGENT_TENANT_DID"))
+                                        (not-empty (kagi.cli-env "KAGI_AGENT_TENANT_DID"))
                                         (:did id))
-                               :prefix (not-empty (System/getenv "KAGI_OBJECT_PREFIX"))})
+                               :prefix (not-empty (kagi.cli-env "KAGI_OBJECT_PREFIX"))})
       (agent-docs/local-docs dir))))
 
 (defn- agent-registry [id args] ((:registry (agent-store id args))))
@@ -703,7 +707,7 @@
         scope (agent-scope args)
         _ (or (persist/load* vault-path) (die "no vault — run: kagi init"))
         store* (agent-store id args)           ; migrates a legacy registry once
-        invite (merge #:invite{:id (str "direct:" (java.util.UUID/randomUUID))}
+        invite (merge #:invite{:id (str "direct:" (random-uuid-str))}
                       {:invite/compartments (:compartments scope)
                        :invite/ops (:ops scope)
                        :invite/purposes (:purposes scope)
@@ -859,12 +863,12 @@
   [id args]
   (let [backend (sync-backend args)
         tenant (or (not-empty (arg-val args "--did"))
-                   (not-empty (System/getenv "KAGI_AGENT_TENANT_DID"))
+                   (not-empty (kagi.cli-env "KAGI_AGENT_TENANT_DID"))
                    (:did id))
         svc (agent-service/service
              (if (= :object (:backend backend))
                (agent-docs/object-docs {:fns (:fns backend) :did tenant
-                                        :prefix (not-empty (System/getenv "KAGI_OBJECT_PREFIX"))})
+                                        :prefix (not-empty (kagi.cli-env "KAGI_OBJECT_PREFIX"))})
                dir))
         host (or (arg-val args "--host") "127.0.0.1")
         port (parse-long* (arg-val args "--port") 0)
@@ -963,10 +967,7 @@
                        (save-store! st (unlock/add-wrap (:meta data) wrap))
                        {:enabled :passkey-prf :credential-id (:credential-id result)}))})]
     (try
-      (if (and (Desktop/isDesktopSupported)
-               (.isSupported (Desktop/getDesktop) Desktop$Action/BROWSE))
-        (.browse (Desktop/getDesktop) (URI/create (:url bridge)))
-        (println "open in a browser:" (:url bridge)))
+      (println "open in a browser:" (:url bridge))
       (let [result ((:await bridge))]
         (if (= result :kagi.passkey-bridge/timeout)
           (die "passkey registration timed out")
@@ -1013,10 +1014,7 @@
                         :idle-timeout-sec idle-sec
                         :clipboard-ttl-sec ttl-sec
                         :secret? false}))
-      (if (and (Desktop/isDesktopSupported)
-               (.isSupported (Desktop/getDesktop) Desktop$Action/BROWSE))
-        (.browse (Desktop/getDesktop) (URI/create (:url window)))
-        (println "open in a browser:" (:url window)))
+      (println "open in a browser:" (:url window))
       (println (str "Ctrl-C で閉じる。" idle-sec " 秒 無操作でも閉じる。"))
       (flush)
       ((:await window))
@@ -1058,7 +1056,7 @@
 (defn- push-with [backend id args expected-seq]
   (if (= :object (:backend backend))
     (sync/object-push! {:fns (:fns backend) :did (:did id) :vault-path vault-path
-                        :prefix (not-empty (System/getenv "KAGI_OBJECT_PREFIX"))
+                        :prefix (not-empty (kagi.cli-env "KAGI_OBJECT_PREFIX"))
                         :expected-seq expected-seq})
     (sync/push! {:id id :vault-path vault-path :pod (not-empty (arg-val args "--pod"))
                  :expected-seq expected-seq})))
@@ -1066,7 +1064,7 @@
 (defn- pull-with [backend id args]
   (if (= :object (:backend backend))
     (sync/object-pull! {:fns (:fns backend) :did (:did id) :vault-path vault-path
-                        :prefix (not-empty (System/getenv "KAGI_OBJECT_PREFIX"))})
+                        :prefix (not-empty (kagi.cli-env "KAGI_OBJECT_PREFIX"))})
     (sync/pull! {:id id :vault-path vault-path :pod (not-empty (arg-val args "--pod"))})))
 
 (defn- backend-report [backend]
@@ -1160,7 +1158,7 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
           (#{"help" "-h" "--help"} (first args))
           (some #{"-h" "--help"} args))
     (help)
-    (let [p  (crypto/jvm-provider)
+    (let [p  (crypto/noble-provider)
           cmd (first args)
           ;; `identity-migrate` must be able to READ the very plaintext
           ;; identity it exists to move into a SecretStore.

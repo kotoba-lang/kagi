@@ -1,79 +1,82 @@
 (ns kagi.persist
   "vault スナップショットの edn 永続化。byte[] は base64 にして edn 安全にする。
-  保存されるのは **暗号文 + wrap 済み鍵 + 台帳メタ** のみ(平文・素の VMK は出ない)。"
+  保存されるのは **暗号文 + wrap 済み鍵 + 台帳メタ** のみ(平文・素の VMK は出ない)。
+
+  JVM-free kbb port (owner direction 2026-09-13: kbb/amu native route, no JVM
+  fallback). The JVM original used FileChannel.lock + fsync + ATOMIC_MOVE; on
+  the Node face this maps to:
+  - lock: a best-effort advisory marker is NOT a lock — a single-writer
+    invariant per process is kept with a per-path in-process atom; the
+    cross-process FileChannel.lock is not reproducible on node:fs without
+    O_EXCL create semantics, so save! takes an in-process lock and the
+    .lock FILE is created O_EXCL-style via mkdir (mkdir is atomic on POSIX
+    when the dir exists) for a coarse cross-process guard. Best-effort is
+    stated honestly: two writers racing across machines is still resolved
+    by last-writer-wins, as before on a non-NFS local FS.
+  - fsync: node:fsyncSync on the file fd (mandatory durability) + best-effort
+    directory fd fsync, same shape as the original.
+  - ATOMIC_MOVE: fs.renameSync is atomic within one filesystem on POSIX —
+    that is the replacement, with the non-atomic fallback removed (rename
+    either works or throws).
+  - PosixFilePermissions rw------- on the temp file: chmod 0600 before write.
+  - Base64/UUID/Instant imports are gone: kagi.b64 (dual-runtime), js/crypto.
+  All bytes flow through kagi.b64 so EDN stays text-safe on both runtimes."
   (:require [clojure.walk :as walk]
-            [clojure.edn :as edn])
-  (:import [java.util Base64]
-           [java.nio ByteBuffer]
-           [java.nio.charset StandardCharsets]
-           [java.nio.file Files Paths StandardCopyOption CopyOption StandardOpenOption]
-           [java.nio.file.attribute PosixFilePermissions FileAttribute]
-           [java.nio.channels FileChannel]))
+            [clojure.edn :as edn]
+            [kagi.b64 :as b64]
+            [scripts.nbb-compat :as compat]))
+
+(def fs (js/require "node:fs"))
+(def node-path (js/require "node:path"))
 
 (defonce ^:private path-locks (atom {}))
 
 (defn- path-lock [path]
   (let [key (str path)]
     (or (get @path-locks key)
-        (get (swap! path-locks #(if (contains? % key) % (assoc % key (Object.)))) key))))
+        (get (swap! path-locks #(if (contains? % key) % (assoc % key (js-obj)))) key))))
 
 (defn- enc [x]
-  (if (bytes? x) {:kagi/b64 (.encodeToString (Base64/getEncoder) ^bytes x)} x))
+  ;; bytes? is JVM-only; on the JS face a byte container is a typed array
+  (if (instance? js/Uint8Array x) {:kagi/b64 (b64/encode x)} x))
 
 (defn- dec* [x]
   (if (and (map? x) (contains? x :kagi/b64))
-    (.decode (Base64/getDecoder) ^String (:kagi/b64 x))
+    (b64/decode (:kagi/b64 x))
     x))
 
-(defn ->edn ^String [data]
+(defn ->edn [data]
   (binding [*print-namespace-maps* false]
     (pr-str (walk/postwalk enc data))))
-(defn <-edn [^String s] (walk/postwalk dec* (edn/read-string s)))
+(defn <-edn [s] (walk/postwalk dec* (edn/read-string s)))
 
 (defn save! [path data]
-  (let [target (.toAbsolutePath (Paths/get path (make-array String 0)))
-        parent (.getParent target)
-        lock-path (Paths/get (str target ".lock") (make-array String 0))]
-    (Files/createDirectories parent (make-array FileAttribute 0))
+  (let [target (.resolve node-path (.cwd js/process) (str path))
+        parent (.dirname node-path target)
+        tmp (str target ".tmp")]
+    (.mkdirSync fs parent #js {:recursive true})
     (locking (path-lock target)
-      (with-open [lock-channel (FileChannel/open lock-path
-                                               (into-array StandardOpenOption
-                                                           [StandardOpenOption/CREATE
-                                                            StandardOpenOption/WRITE]))
-                _lock (.lock lock-channel)]
-      (let [tmp (Files/createTempFile parent ".kagi-persist-" ".tmp"
-                                      (make-array FileAttribute 0))
-            payload (.getBytes (->edn data) StandardCharsets/UTF_8)]
+      ;; coarse cross-process guard: an O_EXCL-style mkdir cannot race
+      (let [lock-dir (str target ".lock")]
+        (try (.mkdirSync fs lock-dir)
+             (catch :default _ (throw (ex-info "kagi.persist: vault is locked by another writer" {:path (str path)}))))
         (try
+          ;; write temp, fsync, rename (atomic within one filesystem), fsync dir
+          (.writeFileSync fs tmp (->edn data) #js {:encoding "utf8" :flag "w" :mode 384})
+          (let [fd (.openSync fs tmp "r+")]
+            (try (.fsyncSync fs fd)
+                 (finally (.closeSync fs fd))))
+          (.renameSync fs tmp target)
           (try
-            (Files/setPosixFilePermissions tmp (PosixFilePermissions/fromString "rw-------"))
-            (catch UnsupportedOperationException _))
-          (with-open [out (FileChannel/open tmp
-                                           (into-array StandardOpenOption
-                                                       [StandardOpenOption/WRITE
-                                                        StandardOpenOption/TRUNCATE_EXISTING]))]
-            (let [buffer (ByteBuffer/wrap payload)]
-              (while (.hasRemaining buffer) (.write out buffer)))
-            (.force out true))
-          (try
-            (Files/move tmp target
-                        (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
-                                                StandardCopyOption/REPLACE_EXISTING]))
-            (catch java.nio.file.AtomicMoveNotSupportedException _
-              (Files/move tmp target
-                          (into-array CopyOption [StandardCopyOption/REPLACE_EXISTING]))))
-          ;; Best-effort directory fsync makes the rename durable on filesystems
-          ;; that permit opening directories. File fsync above is mandatory.
-          (try
-            (with-open [dir (FileChannel/open parent
-                                              (into-array StandardOpenOption
-                                                          [StandardOpenOption/READ]))]
-              (.force dir true))
-            (catch Exception _))
+            (let [dfd (.openSync fs parent "r")]
+              (try (.fsyncSync fs dfd)
+                   (finally (.closeSync fs dfd))))
+            (catch :default _))
           (finally
-            (Files/deleteIfExists tmp)))))))
-  data)
+            (try (.rmdirSync fs lock-dir) (catch :default _))
+            (try (.unlinkSync fs tmp) (catch :default _))))))
+    data))
 
 (defn load* [path]
-  (let [f (java.io.File. ^String path)]
-    (when (.exists f) (<-edn (slurp f)))))
+  (let [f (.resolve node-path (.cwd js/process) (str path))]
+    (when (.existsSync fs f) (<-edn (.readFileSync fs f "utf8")))))
