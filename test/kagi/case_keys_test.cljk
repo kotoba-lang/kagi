@@ -1,0 +1,115 @@
+(ns kagi.case-keys-test
+  (:require [cljs.test :refer [deftest is async run-tests]]
+            [kagi.case-keys :as keys] [kagi.store :as store]))
+
+;; In-memory qualification fixture only: deliberately NOT a production KMS.
+(defn fixture []
+  (let [key (atom nil) lifecycle (atom :absent) events (atom [])
+        scope (atom {:case-id "case-a" :subject "applicant-a" :tenant "kotoba" :principal "reviewer-a"
+                     :purpose "identity-review" :expires-at 1000
+                     :allowed-ops keys/operations :slots #{"passport"}})
+        clock (atom 10) audit-ok (atom true)
+        calls (atom 0) saved (atom nil)
+        ports {:now! #(deref clock)
+               :with-case!
+               (fn [_ f]
+                 (f {:scope (assoc @scope :status @lifecycle)
+                     :context {:did "reviewer-a" :role :owner :tenant "kotoba" :clearance :restricted}
+                     :store (store/mem-store)
+                     :audit! (fn [event]
+                               (swap! events conj event)
+                               {:status (if @audit-ok :committed :failed)
+                                :event event :receipt-ref "audit-1"})
+                     :custody!
+                     (fn [{:keys [op case-id request-id aad bytes]}]
+                       (swap! calls inc)
+                       (let [base {:case-id case-id :request-id request-id :receipt-ref "custody-1"}]
+                         (case op
+                           :create
+                           (-> (.generateKey (.-subtle js/crypto) #js {:name "AES-GCM" :length 256}
+                                             false #js ["encrypt" "decrypt"])
+                               (.then (fn [k] (reset! key k) (reset! lifecycle :active)
+                                        (assoc base :status :active))))
+                           :encrypt
+                           (let [iv (.getRandomValues js/crypto (js/Uint8Array. 12))]
+                             (-> (.encrypt (.-subtle js/crypto) #js {:name "AES-GCM" :iv iv :additionalData aad}
+                                           @key bytes)
+                                 (.then (fn [cipher]
+                                          (let [out (js/Uint8Array. (+ 12 (.-byteLength cipher)))]
+                                            (.set out iv) (.set out (js/Uint8Array. cipher) 12)
+                                            (reset! saved out) (assoc base :status :ok :bytes out))))))
+                           :decrypt
+                           (-> (.decrypt (.-subtle js/crypto)
+                                         #js {:name "AES-GCM" :iv (.slice bytes 0 12) :additionalData aad}
+                                         @key (.slice bytes 12))
+                               (.then #(assoc base :status :ok :bytes (js/Uint8Array. %))))
+                           :revoke (do (reset! lifecycle :revoked) (assoc base :status :revoked))
+                           ;; Removing a local reference cannot attest all-copy erasure.
+                           :destroy (do (reset! key nil) (reset! lifecycle :destroy-pending)
+                                        (assoc base :status :destroy-pending)))))}))}]
+    {:ports ports :scope scope :clock clock :audit-ok audit-ok :calls calls
+     :saved saved :events events :key key}))
+(defn request [op]
+  {:op op :case-id "case-a" :request-id (str (random-uuid)) :purpose "identity-review"
+   :slot "passport" :bytes (.encode (js/TextEncoder.) "synthetic passport fixture")})
+(defn denied [p expected]
+  (-> p (.then (fn [_] (is false "must reject")))
+      (.catch (fn [e] (is (= expected (ex-message (or (ex-cause e) e))))))))
+
+(deftest real-aead-and-access-boundaries
+  (async done
+    (let [{:keys [ports scope audit-ok calls saved events key]} (fixture)]
+      (-> (keys/operate! ports (request :create))
+          (.then (fn [r] (is (= :active (:status r))) (is (false? (.-extractable @key)))
+                   (keys/operate! ports (request :encrypt))))
+          (.then (fn [r] (is (= :ok (:status r))) (is (= 2 (count @events)))
+                   (keys/operate! ports (assoc (request :decrypt) :bytes @saved))))
+          (.then (fn [r] (is (= "synthetic passport fixture" (.decode (js/TextDecoder.) (:bytes r))))
+                   (denied (keys/operate! ports (assoc (request :decrypt) :case-id "case-b" :bytes @saved))
+                           "case-scope-denied")))
+          (.then (fn [] (swap! scope assoc :tenant "other")
+                   (denied (keys/operate! ports (request :decrypt)) "case-scope-denied")))
+          (.then (fn [] (swap! scope assoc :tenant "kotoba" :principal "reviewer-b")
+                   (denied (keys/operate! ports (request :decrypt)) "case-scope-denied")))
+          (.then (fn [] (swap! scope assoc :principal "reviewer-a") (reset! audit-ok false)
+                   (denied (keys/operate! ports (request :encrypt)) "case-audit-unconfirmed")))
+          (.then (fn [] (is (= 3 @calls) "no crypto after scope or audit denial")
+                   (reset! audit-ok true)
+                   (denied (keys/operate! ports (request :destroy)) "case-lifecycle-denied")))
+          (.then (fn [] (keys/operate! ports (request :revoke))))
+          (.then (fn [r] (is (= :revoked (:status r)))
+                   (denied (keys/operate! ports (assoc (request :decrypt) :bytes @saved)) "case-lifecycle-denied")))
+          (.then (fn [] (keys/operate! ports (request :destroy))))
+          (.then (fn [r] (is (= :destroy-pending (:status r)))
+                   (is (nil? (:key r))) (is (nil? (:bytes r))) (done)))
+          (.catch (fn [e] (is false (str e)) (done)))))))
+
+(deftest reject-unsubstantiated-destruction
+  (async done
+    (let [ports {:now! (constantly 1)
+                 :with-case! (fn [_ f]
+                               (f {:scope {:case-id "case-a" :subject "applicant-a" :tenant "kotoba" :principal "reviewer-a"
+                                           :purpose "identity-review" :expires-at 100 :allowed-ops #{:destroy}
+                                           :status :revoked}
+                                   :context {:did "reviewer-a" :role :owner :tenant "kotoba" :clearance :restricted} :store (store/mem-store)
+                                   :audit! (fn [e] {:status :committed :event e :receipt-ref "a"})
+                                   :custody! (fn [e] (assoc (select-keys e [:case-id :request-id])
+                                                           :status :destroyed :receipt-ref "d"))}))}]
+      (-> (denied (keys/operate! ports (request :destroy)) "case-custody-unconfirmed")
+          (.then done) (.catch (fn [e] (is false (str e)) (done)))))))
+
+(deftest authenticated-context-and-expiry
+  (async done
+    (let [{:keys [ports scope saved clock calls]} (fixture)]
+      (-> (keys/operate! ports (request :create))
+          (.then (fn [_] (keys/operate! ports (request :encrypt))))
+          (.then (fn [_]
+                   ;; Same key and ciphertext but changed subject must fail AEAD.
+                   (swap! scope assoc :subject "another-applicant")
+                   (-> (keys/operate! ports (assoc (request :decrypt) :bytes @saved))
+                       (.then (fn [_] (is false "AAD mismatch must reject")))
+                       (.catch (fn [_] (is true))))))
+          (.then (fn [] (swap! scope assoc :subject "applicant-a") (reset! clock 1000)
+                   (denied (keys/operate! ports (request :encrypt)) "case-scope-denied")))
+          (.then (fn [] (is (= 3 @calls)) (done)))
+          (.catch (fn [e] (is false (str e)) (done)))))))

@@ -1,0 +1,86 @@
+(ns kagi.case-keys
+  "Private case crypto facade. Host owns authenticated context, serialization,
+  durable audit and custody. No key-export operation or fallback backend."
+  (:require [kagi.governor :as governor]))
+
+(def operations #{:create :encrypt :decrypt :revoke :destroy})
+(def governor-ops {:create :item/create :encrypt :item/update
+                   :decrypt :item/reveal :revoke :share/revoke :destroy :item/rotate})
+(defn- require! [ok reason]
+  (when-not ok (throw (ex-info (name reason) {:reason reason}))))
+(defn- text? [s] (and (string? s) (<= 1 (count s) 256)))
+(defn- bytes? [v] (instance? js/Uint8Array v))
+(defn aad [case-id subject slot]
+  (.encode (js/TextEncoder.)
+           (js/JSON.stringify #js ["kagi-case-evidence-v1" case-id subject slot])))
+
+(defn operate!
+  "with-case! must hold authoritative case serialization until this promise
+  settles. It supplies fresh server-owned scope, governor context/store, and
+  audit!/custody! functions. Never populate scope from request JSON. Custody
+  must independently enforce persistent revocation and idempotent destruction."
+  [ports request]
+  (-> (js/Promise.resolve nil)
+      (.then
+       (fn []
+         (let [{:keys [op case-id request-id purpose slot bytes]} request]
+           (require! (and (operations op) (text? case-id) (text? request-id)
+                          (text? purpose)) :invalid-case-operation)
+           (when (#{:encrypt :decrypt} op)
+             (require! (and (text? slot) (bytes? bytes)
+                            (<= 1 (.-byteLength bytes) (+ 6291456 28))) :invalid-case-bytes))
+           (require! (and (fn? (:with-case! ports)) (fn? (:now! ports))) :case-authority-unavailable)
+           ((:with-case! ports)
+            (select-keys request [:op :case-id :request-id :purpose :slot])
+            (fn [{:keys [scope context store audit! custody!]}]
+              (let [now ((:now! ports))
+                    {:keys [subject principal expires-at allowed-ops slots status]} scope
+                    ctx (assoc context :purpose purpose :now now)
+                    verdict (governor/check
+                             {:op (governor-ops op) :item-id case-id
+                              :tenant (:tenant scope) :classification :restricted :output-classification :restricted}
+                             ctx {:confidence 1.0 :plaintext-bytes (when bytes (.-byteLength bytes))} store)]
+                (require! (and (= case-id (:case-id scope))
+                               (= principal (:did context)) (text? subject)
+                               (text? (:tenant scope)) (= (:tenant scope) (:tenant context))
+                               (number? now) (number? expires-at) (< now expires-at)
+                               (= purpose (:purpose scope)) (contains? allowed-ops op)
+                               (or (not (#{:encrypt :decrypt} op)) (contains? slots slot)))
+                          :case-scope-denied)
+                (require! (:ok? verdict) :case-governor-denied)
+                (require! (case op :create (= :absent status)
+                                (:encrypt :decrypt) (= :active status)
+                                :revoke (#{:active :revoked} status)
+                                :destroy (#{:revoked :destroy-pending :destroyed} status)
+                                false) :case-lifecycle-denied)
+                (require! (and (fn? audit!) (fn? custody!)) :case-custody-unavailable)
+                (let [event {:case-id case-id :request-id request-id :op op
+                             :principal principal :purpose purpose :slot slot}]
+                  (-> (js/Promise.resolve (audit! event))
+                      (.then
+                       (fn [receipt]
+                         (require! (and (= :committed (:status receipt))
+                                        (= event (:event receipt))
+                                        (text? (:receipt-ref receipt))) :case-audit-unconfirmed)
+                         (require! (< ((:now! ports)) expires-at) :case-scope-expired)
+                         (custody! (assoc event :audit-ref (:receipt-ref receipt)
+                                         :aad (aad case-id subject slot) :bytes bytes))))
+                      (.then
+                       (fn [result]
+                         (require! (and (= case-id (:case-id result))
+                                        (= request-id (:request-id result))
+                                        (text? (:receipt-ref result))) :case-custody-unconfirmed)
+                         (require! (< ((:now! ports)) expires-at) :case-scope-expired)
+                         (let [status (:status result)]
+                           (require! (case op
+                                       :create (= :active status)
+                                       (:encrypt :decrypt) (and (= :ok status) (bytes? (:bytes result))
+                                                                 (<= 1 (.-byteLength (:bytes result)) (+ 6291456 28)))
+                                       :revoke (= :revoked status)
+                                       :destroy (or (= :destroy-pending status)
+                                                    (and (= :destroyed status)
+                                                         (= :all-key-copies (:coverage result))
+                                                         (text? (:evidence-ref result))))
+                                       false) :case-custody-unconfirmed)
+                           (select-keys result [:case-id :request-id :status :receipt-ref
+                                                :bytes :coverage :evidence-ref]))))))))))))))
