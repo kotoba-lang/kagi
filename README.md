@@ -1,5 +1,13 @@
 # kagi-clj — 対量子(PQC)シークレット vault（1Password 代替）
 
+> **実行の正 (2026-09-13)**: CLI は **amu native kexe 前提** — decision core を
+> `.kotoba` guest に、crypto/clock/file/keychain を host capability (wire
+> 3/7/35/20/33) に分離し、`amu compile --target x86_64-macos` + `extract-native`
+> で `bin/kagi` を kexe shim に差し替える。JVM exec は廃止 (ADR
+> `docs/adr/0002-native-kexe-cli.md`)。crypto provider は `kagi.crypto.noble`
+> (純 JS `@noble/*`, ML-KEM-768/ML-DSA-65/Argon2id 含む) — JVM provider は :clj
+> 分岐の互換実装として残る。
+
 `src/kagi/phase.kotoba` is the capability-free typed form of the phase gate.
 It preserves the rule that a phase may only add caution and can never relax a
 policy disposition. CI compares 192 phase/operation/disposition combinations
@@ -559,7 +567,24 @@ KEK にする。PRF 非対応環境では OS keychain unlock と passphrase reco
 kbb -M:lint           # clj-kondo（errors fail）
 kbb -M:test           # contract tests
 kbb -M:dev:run        # デモ（actor 直叩き）
-kbb -M:dev:cli <cmd>  # CLI（bin/kagi と同じ）
+bin/kagi <cmd>        # CLI — kexe shim (本命; ADR 0002)。JVM route は
+                      #   過渡期のみ: kbb --backend interpreter -m kagi.cli
+kbb --backend sci --classpath src:test -m kagi.crypto.noble-interop-test
+                      # crypto 実測 (9/13 assert 緑, JVM-free)
+```
+
+### native kexe ビルド (ADR 0002)
+
+```bash
+# decision core の検査とビルド
+amu check src/kagi/phase.kotoba --jvm-free
+amu compile src/kagi/phase.kotoba --target x86_64-macos --jvm-free \
+  --policy kagi-policy.edn --output build/kagi-phase.kexe
+
+# capability は package 時に bake (--string-pool, grant index, scopes)。
+# caller が環境変数で持ち上げられない fail-closed 形 (amu 2a3d4333 の規律)。
+# string 上限は native 経路では per-run budget (KEXE_STRING_POOL, 256MiB まで)
+# — kagi guest は Digest first (小さい確定値のみ) なので上限は非本質。
 ```
 
 > **状態**: JVM provider(`jvm-provider`)は **実 PQC を配線済み** — JDK 24 標準の
