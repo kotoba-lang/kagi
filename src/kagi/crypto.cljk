@@ -368,4 +368,20 @@
 ;; 後方互換: 旧称 bc-provider は jvm-provider を返す。
 (def bc-provider jvm-provider)
 
-   ))
+   )) ; closes the #?(:clj (do ...)) block above
+
+#?(:cljs
+   (do
+     ;; ───────── kbb / Node 経路の provider 選択 ─────────
+     ;;
+     ;; `default-provider` は kbb (sci on Node, ADR-2609112000) が CLI を動かす
+     ;; ときの入口。JVM 経路では jvm-provider (JCA + BouncyCastle)、kbb 経路では
+     ;; kagi.crypto.noble (@noble/* 純 JS) — 同じ Provider プロトコルなので
+     ;; この ns の封緘/wrap/share ヘルパは 1 本のまま両方で通る。
+     ;;
+     ;; 実測 (2026-09-13, agent/kagi-native-ceiling):
+     ;;   noble-interop-test 9/13 assertions 緑、digest-noble-test 3 緑 (kbb 上)。
+     ;;   sign→verify probe: ed 64B / mldsa 3309B / verify true。
+     (require '[kagi.crypto.noble :as noble])
+     (def default-provider noble/noble-provider)))
+
