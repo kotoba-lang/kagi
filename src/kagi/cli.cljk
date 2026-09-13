@@ -53,10 +53,35 @@
             [kagi.sync :as sync]
             [kagi.import.onepassword :as import-1p]
             [kagitaba.category :as kcat])
-  (:import [java.time Instant]
-           [java.awt Desktop Desktop$Action]
-           [java.net URI]
-           [java.util UUID]))
+  #?(:clj
+     (:import [java.time Instant]
+              [java.awt Desktop Desktop$Action]
+              [java.net URI]
+              [java.util UUID])))
+
+;; ───────── host 境界: clock / uuid / browser-open ─────────
+;;
+;; kbb (sci on Node) では java.* が無いので、CLI が使う 3 つの host 機能を
+;; ここで 1 か所に吸収する (ADR-2609112000 の「判断を含まない機構層」)。
+;; JVM 経路は java.time.Instant / UUID を使い、kbb 経路は js/Date / crypto.randomUUID。
+(defn host-now-str
+  "ISO-8601 の現在時刻文字列。JVM: java.time.Instant。kbb: js/Date.toISOString。
+   record-reference! の :recorded-at 等の平文監査面にしか出ない。"
+  []
+  #?(:clj (str (Instant/now))
+     :cljs (.toISOString (js/Date.))))
+
+(defn host-uuid
+  "ランダム UUID 文字列。JVM: java.util.UUID/randomUUID。kbb: crypto.randomUUID。"
+  []
+  #?(:clj (str (java.util.UUID/randomUUID))
+     :cljs (js/crypto.randomUUID)))
+
+(defn host-plus-1h-str
+  "現在時刻 +1 時間の ISO-8601。CACAO の :expiry 用。"
+  []
+  #?(:clj (str (.plusSeconds (Instant/now) 3600))
+     :cljs (.toISOString (js/Date. (+ (.getTime (js/Date.)) 3600000)))))
 
 ;; Vault home resolution (ADR-2607170500). The vault MUST NOT live in a repo
 ;; checkout / per-agent worktree: those get cleaned, re-cloned, or clobbered by
@@ -164,8 +189,8 @@
 
 (defn- self-cacao [id]
   (cacao/mint id {:cap :cap/admin :scope (:graph id)}
-              {:aud aud :nonce (str (UUID/randomUUID))
-               :issued-at (str (Instant/now)) :expiry (str (.plusSeconds (Instant/now) 3600))}))
+              {:aud aud :nonce (str (host-uuid))
+               :issued-at (host-now-str) :expiry (host-plus-1h-str)}))
 
 (defn- context [id vmk purpose]
   ;; `:now` is not decoration: `do-effect` stamps `:item/key-created-at` with
@@ -173,13 +198,13 @@
   ;; `key-registry/authorize!` fails closed without a current time, which is
   ;; what `:share/grant` needs to check a recipient's KEM key lifecycle.
   {:did (:did id) :role :owner :phase 3 :vmk vmk :purpose purpose
-   :now (str (Instant/now))
+   :now (host-now-str)
    :aud aud :cacao (self-cacao id) :register (identity/member-record id :owner)})
 
 (defn- run-op! [p id store vmk req purpose]
   (let [actor (op/build store {:crypto p :signer (identity/sign-secret id)})]
     (:state (g/run* actor {:request req :context (context id vmk purpose)}
-                    {:thread-id (str (:op req) "-" (:item-id req) "-" (UUID/randomUUID))}))))
+                    {:thread-id (str (:op req) "-" (:item-id req) "-" (host-uuid))}))))
 
 (defn- run-op-with!
   "`run-op!` plus two things the sharing commands need.
@@ -199,7 +224,7 @@
                                :signer (identity/sign-secret id)
                                :signer-key (:signing-key id)})]
     (:state (g/run* actor {:request req :context (merge (context id vmk purpose) extra)}
-                    {:thread-id (str (:op req) "-" (:item-id req) "-" (UUID/randomUUID))}))))
+                    {:thread-id (str (:op req) "-" (:item-id req) "-" (host-uuid))}))))
 
 ;; ───────── opts ─────────
 
@@ -359,7 +384,7 @@
             (let [r (record-reference! record-path
                                        {:item name :compartment comp
                                         :category cat :did (:did id)
-                                        :now (str (Instant/now))})]
+                                        :now (host-now-str)})]
               (println "recorded" (:credential/item r) "->" record-path))))))))
 
 (defn- cmd-get [p id args]
@@ -703,7 +728,7 @@
         scope (agent-scope args)
         _ (or (persist/load* vault-path) (die "no vault — run: kagi init"))
         store* (agent-store id args)           ; migrates a legacy registry once
-        invite (merge #:invite{:id (str "direct:" (java.util.UUID/randomUUID))}
+        invite (merge #:invite{:id (str "direct:" (host-uuid))}
                       {:invite/compartments (:compartments scope)
                        :invite/ops (:ops scope)
                        :invite/purposes (:purposes scope)
@@ -1160,7 +1185,9 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
           (#{"help" "-h" "--help"} (first args))
           (some #{"-h" "--help"} args))
     (help)
-    (let [p  (crypto/jvm-provider)
+    (let [p  (if (resolve 'crypto/default-provider)
+               (crypto/default-provider)
+               (crypto/jvm-provider))
           cmd (first args)
           ;; `identity-migrate` must be able to READ the very plaintext
           ;; identity it exists to move into a SecretStore.
