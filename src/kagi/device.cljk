@@ -46,20 +46,34 @@
             [kagi.crypto :as crypto]
             [kagi.secret-store :as secret-store]
             [kagi.unlock :as unlock])
-  (:import [java.time Instant]
-           [java.time.temporal ChronoUnit]
-           [java.util Base64 UUID]))
+  #?(:clj (:import [java.time Instant]
+                   [java.time.temporal ChronoUnit]
+                   [java.util Base64 UUID])))
+
+;; The JVM imports above are clj-only: on the kbb/nbb engine the same jobs are
+;; done with plain JS (Date ISO strings, node Buffer base64,
+;; crypto.randomUUID) so the CLI (`kagi get`, used by every resident bot)
+;; loads without a JVM.
 
 (def ^:const default-ttl-sec 900)
 
-(def ^:private b64-enc (Base64/getEncoder))
-(def ^:private b64-dec (Base64/getDecoder))
+(def ^:private b64-enc
+  #?(:clj (Base64/getEncoder)
+     :cljs (js/require "node:buffer").Buffer))
+(def ^:private b64-dec
+  #?(:clj (Base64/getDecoder)
+     :cljs (js/require "node:buffer").Buffer))
 
-(defn- b64 [^bytes b] (.encodeToString b64-enc b))
-(defn- unb64 ^bytes [^String s] (.decode b64-dec s))
+(defn- b64 [^bytes b]
+  #?(:clj (.encodeToString b64-enc b)
+     :cljs (.toString b64-enc (js/Uint8Array. b) "base64")))
+(defn- unb64 [s]
+  #?(:clj (.decode b64-dec s)
+     :cljs (js/Uint8Array.from (.from b64-dec s "base64"))))
 
 (defn- now-iso []
-  (str (.truncatedTo (Instant/now) ChronoUnit/SECONDS)))
+  #?(:clj (str (.truncatedTo (Instant/now) ChronoUnit/SECONDS))
+     :cljs (-> (js/Date.) (.toISOString) (subs 0 19) (str "Z"))))
 
 (defn- b64-map
   "Encode a `{:x bytes :pq bytes}` hybrid key/ciphertext for transport."
@@ -99,7 +113,8 @@
   The private key never appears in the request and never leaves this machine."
   [p {:keys [label store]}]
   (let [{:keys [public secret]} (crypto/kem-keypair p)
-        device-id (str (UUID/randomUUID))
+        device-id #?(:clj (str (UUID/randomUUID))
+                     :cljs (str (js/crypto.randomUUID)))
         ref (device-secret-ref device-id)
         st (or store (secret-store/store-for-ref ref))]
     (secret-store/put-secret! st ref (pr-str (b64-map secret))
@@ -154,7 +169,16 @@
   (when-let [errs (seq (grant-errors request confirmed-fingerprint))]
     (throw (ex-info "device grant refused" {:device/errors errs})))
   (let [envelope (crypto/share-dek p (unb64-map (:device/public request)) vmk)
-        issued (.truncatedTo (Instant/now) ChronoUnit/SECONDS)]
+        issued-at #?(:clj (.truncatedTo (Instant/now) ChronoUnit/SECONDS)
+                     :cljs (-> (js/Date.) (.toISOString) (subs 0 19) (str "Z")))
+        issued-str (str issued-at)
+        expires-str (str (if (string? issued-at)
+                           (-> (js/Date. (.getTime (js/Date. issued-at))
+                                         (* 1000 (or ttl-sec default-ttl-sec)))
+                               (.toISOString)
+                               (subs 0 19)
+                               (str "Z"))
+                           (.plusSeconds issued-at (or ttl-sec default-ttl-sec))))]
     {:grant/device-id (:device/id request)
      :grant/label (:device/label request)
      :grant/kem-ct (b64-map (:kem-ct envelope))
@@ -162,12 +186,12 @@
      :grant/wrapped (b64 (:wrapped envelope))
      :grant/fingerprint (fingerprint (unb64-map (:device/public request)))
      :grant/vault-id vault-id
-     :grant/issued-at (str issued)
+     :grant/issued-at issued-str
      ;; Short by default. A grant sitting in a chat log for a week is a
      ;; standing offer of the whole vault to anyone who also has the device
      ;; key -- and the device key is on a machine that is, by definition, not
      ;; yet trusted enough to have been enrolled.
-     :grant/expires-at (str (.plusSeconds issued (or ttl-sec default-ttl-sec)))}))
+     :grant/expires-at expires-str}))
 
 ;; ───────────────────────────── B: accept ─────────────────────────────
 
