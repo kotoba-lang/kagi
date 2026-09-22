@@ -21,7 +21,7 @@
 (defn- source-file [ns-sym]
   (let [base (-> (name ns-sym) (str/replace "-" "_") (str/replace "." "/"))]
     (some (fn [ext] (let [f (io/file "src" (str base ext))] (when (.exists f) f)))
-          [".cljc" ".clj" ".cljs"])))
+          [".cljc" ".clj" ".cljs" ".cljk"])))
 
 (defn- required-nses [^java.io.File f]
   (let [src (slurp f)]
