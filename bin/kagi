@@ -3,4 +3,45 @@
 # PQC は JDK24 標準 provider を使うため bb ではなく clojure(full JDK)で実行する。
 # vault は実行ディレクトリの ./.kagi に置かれる。
 cd "$(dirname "$0")/.." || exit 1
-exec kbb -M:dev:cli "$@"
+
+# JVM classloader は .clj/.cljc しか解決しない。2026-09-11 の cljk rename
+# (adr-2609111500, cljk-origin.edn) 以降、kagi の src/ は全 .cljk になり、
+# plain `clojure -M:dev:cli` は kagi.cli を解決できない ("Could not locate
+# kagi/cli__init.class / cli.clj / cli.cljc on classpath")。さらに :dev は
+# langchain を :local/root に差し替えるため、langchain も .cljk しか持たない。
+#
+# 対処: classpath 上で .cljk を含む全ソースディレクトリを .cljc 名で写した
+# JVM 読込可能ミラー jvm-mirror-20260923/ を毎回再生成し、先頭に載せて
+# java で直接起動する。59+16 ファイルの cp なので数十 ms で済む。
+#
+# (clojure CLI の -M と -cp は併用不可 — -cp の値が main-opts に漏れる。
+#  従って classpath は -Spath で取得し、mirror を先頭に java 直叩き。)
+#
+# launchd 由来の呼出 (nudge-scan plist) は最小 PATH (/usr/bin 込みだが
+# homebrew 無し) で走るため、md5 等の外部コマンドには依存しない。
+MIRROR=jvm-mirror-20260923
+rm -rf "$MIRROR" && mkdir -p "$MIRROR"
+
+CP="$(clojure -Spath -M:dev:cli)" || exit 1
+MIRROR_CP=""
+IFS=':' read -ra _cp_dirs <<< "$CP"
+for d in "${_cp_dirs[@]}"; do
+  [ -d "$d" ] || continue
+  # このディレクトリ配下に .cljk が 1 個でもあればミラー化対象
+  hit="$(find "$d" -name '*.cljk' -print -quit 2>/dev/null)"
+  [ -n "$hit" ] || continue
+  sub="$MIRROR/$(basename "$d")"
+  [ -d "$sub" ] && sub="$sub-$(basename "$d")-dup"
+  find "$d" -name '*.cljk' -print0 2>/dev/null | while IFS= read -r -d '' f; do
+    rel="${f#"$d"/}"
+    out="$sub/${rel%.cljk}.cljc"
+    mkdir -p "$(dirname "$out")"
+    cp "$f" "$out"
+  done
+  MIRROR_CP="$MIRROR_CP:$sub"
+done
+MIRROR_CP="${MIRROR_CP#:}"
+
+JAVA_BIN="${JAVA_HOME:-/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home}/bin/java"
+
+exec "$JAVA_BIN" -cp "${MIRROR_CP}:${CP}" clojure.main -m kagi.cli "$@"

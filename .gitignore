@@ -6,5 +6,6 @@
 .cpcache/
 .clj-kondo/.cache/
 target/
+jvm-mirror-20260923/
 .nrepl-port
 node_modules/
