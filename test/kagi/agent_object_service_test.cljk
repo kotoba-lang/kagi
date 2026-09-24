@@ -6,7 +6,7 @@
   bucket, releases ciphertext, and the client decrypts. If this passes, `kagi
   agent serve` can run somewhere the vault is not — which is the whole
   prerequisite for putting the API behind a URL."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is testing]]
             [kagi.agent :as agent]
             [kagi.agent-client :as client]
@@ -66,7 +66,7 @@
                                       :meta {}))
                 (sync/object-push! {:fns fns :did did :vault-path vault-path}))
         _ (run-owner p owner st vmk {:op :item/create :item-id "shared" :compartment "ops"
-                                     :plaintext (.getBytes "secret-from-a-bucket" "UTF-8")} :seed)
+                                     :plaintext (kbytes/utf8-bytes "secret-from-a-bucket")} :seed)
         _ (save!)
         object-docs (docs/object-docs {:fns fns :did did})
         {:keys [secret record]} (agent/mint-invite p {:compartments #{"ops"} :uses 3
@@ -115,9 +115,8 @@
             {:keys [principal]} (client/enroll! c {:invite (:invite f) :label "x"})]
         ((:grant! f) (:did principal) "shared")
         (let [everything (str/join " " (map (fn [[k v]]
-                                              (str k " " (String. (byte-array
-                                                                   (map unchecked-byte v))
-                                                                  "UTF-8")))
+                                              (str k " " (kbytes/utf8-string (byte-array
+                                                                   (map unchecked-byte v)))))
                                             @(:objects f)))]
           (is (not (str/includes? everything "secret-from-a-bucket")))
           (testing "registry も token を保持しない"

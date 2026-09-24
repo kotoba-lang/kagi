@@ -2,7 +2,7 @@
   "The claim this suite has to hold up: an agent principal reads exactly what
   it was granted, with no VMK anywhere in its process, and un-granting takes
   the access away for real rather than on paper."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest testing is]]
             [kagi.agent :as agent]
             [kagi.agent-protocol :as proto]
@@ -48,9 +48,9 @@
         vmk (crypto/rand-bytes p 32)
         st (store/mem-store {:members {(:did owner) (identity/member-record owner :owner)}})
         _ (run-owner p owner st vmk {:op :item/create :item-id "granted" :compartment "ops"
-                                     :plaintext (.getBytes "s3cr3t-value" "UTF-8")} :seed)
+                                     :plaintext (kbytes/utf8-bytes "s3cr3t-value")} :seed)
         _ (run-owner p owner st vmk {:op :item/create :item-id "withheld" :compartment "ops"
-                                     :plaintext (.getBytes "not-for-the-agent" "UTF-8")} :seed)
+                                     :plaintext (kbytes/utf8-bytes "not-for-the-agent")} :seed)
         {:keys [request]} (agent/make-request! p {:label "resident@test" :custody :file :home home})
         invite #:invite{:id "test-invite"
                         :compartments (set (or compartments #{"ops"}))
@@ -215,12 +215,12 @@
               (persist/save! (str home "/vault.edn")
                              (assoc data :meta (select-keys registry
                                                             [:agent/registry :agent/invites]))))
-          _ (.delete (java.io.File. (agent/registry-path home)))
+          _ (kio/delete (kio/file (agent/registry-path home)))
           _ (is (empty? (:agent/registry (agent/load-registry home)))
                 "移行前は空に見える")
           session (agent/open {:home home :agent-id agent-id})]
       (is (= :open (:status session)))
-      (is (.exists (java.io.File. (agent/registry-path home))) "移行はファイルを作る")
+      (is (kio/exists? (kio/file (agent/registry-path home))) "移行はファイルを作る")
       (is (= agent-id (:agent/id (agent/principal (agent/load-registry home) agent-id)))))))
 
 (deftest a-refused-enrollment-does-not-bump-the-sequence

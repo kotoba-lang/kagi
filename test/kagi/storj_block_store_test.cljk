@@ -9,7 +9,7 @@
 
   同じ経路が **Backblaze B2** にもそのまま使える —— B2 は S3 互換面を出すので、
   違うのは `storj.gateway` に渡す endpoint だけ。"
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.http.form-urlencoded :as form-urlencoded] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.store :as store]
@@ -31,7 +31,7 @@
   (-> url
       (str/split #"\?") first
       (str/replace (re-pattern (str "^https?://[^/]+/" bucket "/")) "")
-      (java.net.URLDecoder/decode "UTF-8")))
+      (form-urlencoded/form-decode)))
 
 (defrecord FakeS3 [objects requests]
   sp/IHttp

@@ -6,7 +6,7 @@
   that the last step — turning released ciphertext into a secret — happens in
   the CLIENT. If the server ever started returning plaintext, this suite would
   keep passing only if the SDK also stopped decrypting, and it does not."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest testing is]]
             [kagi.agent :as agent]
             [kagi.agent-client :as client]
@@ -58,9 +58,9 @@
         vmk (crypto/rand-bytes p 32)
         st (store/mem-store {:members {(:did owner) (identity/member-record owner :owner)}})
         _ (run-owner p owner st vmk {:op :item/create :item-id "shared" :compartment "ops"
-                                     :plaintext (.getBytes "over-the-wire-secret" "UTF-8")} :seed)
+                                     :plaintext (kbytes/utf8-bytes "over-the-wire-secret")} :seed)
         _ (run-owner p owner st vmk {:op :item/create :item-id "private" :compartment "ops"
-                                     :plaintext (.getBytes "never-shared" "UTF-8")} :seed)
+                                     :plaintext (kbytes/utf8-bytes "never-shared")} :seed)
         {:keys [secret record]} (agent/mint-invite p {:compartments (or compartments #{"ops"})
                                                       :ops ops
                                                       :uses (or uses 1)

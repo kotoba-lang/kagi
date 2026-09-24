@@ -1,10 +1,9 @@
 (ns kagi.ledger-test
   "改竄検知台帳: ハッシュ鎖 + hybrid 署名(Ed25519+ML-DSA-65)の検証。"
-  (:require [kotoba.test :refer [deftest testing is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest testing is]]
             [kagi.ledger :as ledger]
             [kagi.identity :as identity]
-            [kagi.crypto :as crypto])
-  (:import [java.util Base64]))
+            [kagi.crypto :as crypto]))
 
 (defn- build [provider signer facts]
   (reduce (fn [led f] (conj led (ledger/make-entry led f provider signer))) [] facts))
@@ -43,7 +42,7 @@
           pub-of (constantly (identity/sign-public id))
           led (build p (identity/sign-secret id)
                      [{:t :committed :op :item/create :actor (:did id)}])
-          garbage (.encodeToString (Base64/getEncoder) (byte-array 100))
+          garbage (kbytes/base64-encode (byte-array 100))
           broken  (assoc-in led [0 :ledger/sig :mldsa] garbage)
           r (ledger/verify-chain broken p pub-of)]
       (is (false? (:ok? r)))

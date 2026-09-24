@@ -14,7 +14,7 @@
   server calls the actions it was handed. This one proves the actions handed
   to it by `kagi ui` really do reach the governor, and that a plaintext which
   genuinely exists still never reaches the page."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [kagitaba.item :as kitem]
             [kotoba.test :refer [deftest is testing]]
             [kagi.clipboard :as clipboard]
@@ -56,7 +56,7 @@
   (let [actor (op/build store {:crypto provider})]
     (g/run* actor
             {:request {:op :item/create :item-id item-id :compartment compartment
-                       :category category :plaintext (.getBytes ^String plaintext "UTF-8")}
+                       :category category :plaintext (kbytes/utf8-bytes ^String plaintext)}
              :context {:did (:did identity) :role :owner :phase 1 :vmk vmk
                        :purpose :daily-use}}
             {:thread-id (str "seed-" item-id)})))
@@ -191,7 +191,7 @@
         (doseq [[k v] (select-keys id [:private-b64 :mldsa-private-b64 :kem-secret])]
           (is (not (str/includes? page (str v)))
               (str (name k) " is on the page")))
-        (is (not (str/includes? page (.encodeToString (java.util.Base64/getEncoder)
+        (is (not (str/includes? page (kbytes/base64-encode
                                                       ^bytes (:vmk session))))
             "the VMK is on the page")))))
 

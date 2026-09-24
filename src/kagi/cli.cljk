@@ -23,8 +23,8 @@
     kagi rotate <name>              # DEK を回転(再封緘)
     kagi log                        # 監査台帳(hybrid 署名 + ハッシュ鎖)を検証して表示
     kagi whoami                     # 自分の did:key / IPNS graph"
-  (:require [kotoba.lang.edn :as edn]
-            [clojure.pprint :as pprint]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.edn :as edn]
+            [kotoba.pprint :as pprint]
             [kotoba.lang.text :as str]
             [langgraph.graph :as g]
             [kagi.operation :as op]
@@ -153,7 +153,7 @@
 ;; ───────── VMK unlock ─────────
 
 (defn- derive-kek [p pass salt]
-  (crypto/argon2id p (.getBytes ^String pass "UTF-8") salt {:m-kb 262144 :t 3 :p 4}))
+  (crypto/argon2id p (kbytes/utf8-bytes ^String pass) salt {:m-kb 262144 :t 3 :p 4}))
 
 (defn- new-vmk-meta [p pass]
   (let [vmk  (crypto/rand-bytes p 32)
@@ -374,7 +374,7 @@
           (when (str/blank? secret) (die "empty secret on stdin"))
           (run-op! p id st vmk (cond-> {:op :item/create :item-id name
                                         :compartment comp
-                                        :plaintext (.getBytes secret "UTF-8")}
+                                        :plaintext (kbytes/utf8-bytes secret)}
                                  cat (assoc :category cat))
                    :cli-add)
           (println "stored" name "in" comp (if cat (str "as " cat) ""))
@@ -395,7 +395,7 @@
         (when-not (store/item st name) (die "no such item:" name))
         (let [r (run-op! p id st vmk {:op :item/reveal :item-id name} :cli-get)
               pt (get-in r [:result :plaintext])]
-          (if pt (print (String. ^bytes pt "UTF-8"))
+          (if pt (print (kbytes/utf8-string ^bytes pt))
               (die "reveal denied:" (get-in r [:result :effect]))))))))
 
 (defn- cmd-copy [p id args]
@@ -411,7 +411,7 @@
         (let [r (run-op! p id st vmk {:op :item/reveal :item-id name} purpose)
               pt (get-in r [:result :plaintext])]
           (if pt
-            (let [secret (String. ^bytes pt "UTF-8")]
+            (let [secret (kbytes/utf8-string ^bytes pt)]
               ;; Printed BEFORE the wait, so the operator can paste while this
               ;; holds custody. It used to print and exit, which killed the
               ;; daemon thread that was supposed to clear the clipboard and
@@ -457,7 +457,7 @@
                   out (autofill/fill-secret!
                        {:page-ws (:webSocketDebuggerUrl page)
                         :selector selector
-                        :secret (String. ^bytes pt "UTF-8")})]
+                        :secret (kbytes/utf8-string ^bytes pt)})]
               ;; Lengths, never the value: enough to tell a landed write from
               ;; a truncated one, not enough to disclose a character of it.
               (println (pr-str (assoc (select-keys out [:ok? :verdict :expected-length
@@ -1075,7 +1075,7 @@
           result (run-op! p id st vmk {:op :item/reveal :item-id item-id} :recovery-get)
           plaintext (get-in result [:result :plaintext])]
       (save-store! st (:meta data))
-      (if plaintext (print (String. ^bytes plaintext "UTF-8"))
+      (if plaintext (print (kbytes/utf8-string ^bytes plaintext))
           (die "recovery reveal denied")))))
 
 ;; ───────── cloud sync (kotobase.net) ─────────

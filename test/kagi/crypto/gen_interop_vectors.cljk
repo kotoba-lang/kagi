@@ -7,12 +7,11 @@
 
   再生成:
     kbb -M:test -m kagi.crypto.gen-interop-vectors"
-  (:require [clojure.java.io :as io]
-            [clojure.pprint]
-            [kagi.crypto :as c])
-  (:import [java.util Base64]))
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as io]
+            [kotoba.pprint]
+            [kagi.crypto :as c]))
 
-(defn- b64 [^bytes b] (.encodeToString (Base64/getEncoder) b))
+(defn- b64 [^bytes b] (kbytes/base64-encode b))
 
 (defn vectors []
   (let [p (c/jvm-provider)
@@ -59,5 +58,5 @@
 (defn -main [& _]
   (let [f (io/file "test/fixtures/jvm-crypto-vectors.edn")]
     (io/make-parents f)
-    (spit f (with-out-str (clojure.pprint/pprint (vectors))))
-    (println "wrote" (.getPath f))))
+    (spit f (with-out-str (kotoba.pprint/pprint (vectors))))
+    (println "wrote" (io/path f))))

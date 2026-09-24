@@ -4,7 +4,7 @@
   ;; kbb (sci on Node) reads the `:cljs` branches: `<-edn` / `->edn` / `load*`
   ;; only. `save!` is JVM-only on purpose — the kbb path is the read seam
   ;; (kagi.vault-read) and must not be able to write vault.edn.
-  (:require [clojure.walk :as walk]
+  (:require [kotoba.lang.coll :as walk]
             [kotoba.lang.edn :as edn]
             #?(:cljs ["node:fs" :as fs]))
   #?(:clj

@@ -1,7 +1,7 @@
 (ns kagi.recovery-io
   "Filesystem ceremony for recovery shares. Files are exclusive-create and
   owner-readable/writable where POSIX permissions are available."
-  (:require [kagi.persist :as persist]
+  (:require [kotoba.bytes :as kbytes] [kagi.persist :as persist]
             [kagi.recovery :as recovery])
   (:import [java.nio.file Files LinkOption OpenOption Paths StandardOpenOption]
            [java.nio.file.attribute PosixFilePermissions]))
@@ -16,7 +16,7 @@
     (Files/createDirectories dir (make-array java.nio.file.attribute.FileAttribute 0))
     (mapv (fn [share]
             (let [p (.resolve dir (format "recovery-%02d.edn" (:recovery/index share)))
-                  content (.getBytes (persist/->edn share) "UTF-8")]
+                  content (kbytes/utf8-bytes (persist/->edn share))]
               (Files/write p content
                            (into-array OpenOption [StandardOpenOption/CREATE_NEW
                                                    StandardOpenOption/WRITE]))

@@ -1,5 +1,5 @@
 (ns kagi.witness-http-test
-  (:require [clojure.java.shell :as shell]
+  (:require [kotoba.process :as shell]
             [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.rotation :as rotation]

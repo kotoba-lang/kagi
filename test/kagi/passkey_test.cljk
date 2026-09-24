@@ -1,12 +1,11 @@
 (ns kagi.passkey-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.passkey :as passkey]
-            [kagi.unlock :as unlock])
-  (:import [java.util Base64]))
+            [kagi.unlock :as unlock]))
 
 (defn- b64 [^bytes value]
-  (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) value))
+  (kbytes/base64url-encode value {:pad? false}))
 
 (deftest browser-bridge-to-vmk-envelope
   (let [p (crypto/jvm-provider)

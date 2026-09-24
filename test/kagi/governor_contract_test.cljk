@@ -1,6 +1,6 @@
 (ns kagi.governor-contract-test
   "単一不変条件のテスト: Governor が拒否する op は副作用ゼロ + 台帳に 1 hold fact。"
-  (:require [kotoba.test :refer [deftest testing is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest testing is]]
             [langgraph.graph :as g]
             [kagi.operation :as op]
             [kagi.store :as store]
@@ -25,10 +25,10 @@
           owner {:did "did:key:zOwner" :role :owner :phase 1
                  :vmk (crypto/rand-bytes cr 32) :purpose :daily-use}
           _ (run actor {:op :item/create :item-id "k1" :compartment "work"
-                        :plaintext (.getBytes "s3cr3t" "UTF-8")} owner)
+                        :plaintext (kbytes/utf8-bytes "s3cr3t")} owner)
           rv (run actor {:op :item/reveal :item-id "k1"} owner)]
       (is (= :revealed (get-in rv [:result :effect])))
-      (is (= "s3cr3t" (String. ^bytes (get-in rv [:result :plaintext]) "UTF-8"))))))
+      (is (= "s3cr3t" (kbytes/utf8-string ^bytes (get-in rv [:result :plaintext])))))))
 
 (deftest viewer-without-grant-is-held
   (testing "grant の無い viewer の reveal は HOLD、台帳に rbac-subject 根拠"
@@ -36,7 +36,7 @@
           owner {:did "did:key:zOwner" :role :owner :phase 1
                  :vmk (crypto/rand-bytes cr 32) :purpose :daily-use}
           _ (run actor {:op :item/create :item-id "k2" :compartment "work"
-                        :plaintext (.getBytes "x" "UTF-8")} owner)
+                        :plaintext (kbytes/utf8-bytes "x")} owner)
           before (count (store/ledger st))
           rv (run actor {:op :item/reveal :item-id "k2"}
                   {:did "did:key:zViewer" :role :viewer :phase 1 :purpose :audit})]
@@ -49,7 +49,7 @@
     (let [[_st cr actor] (fresh)
           owner {:did "did:key:zOwner" :role :owner :phase 1 :vmk (crypto/rand-bytes cr 32)}
           _ (run actor {:op :item/create :item-id "k3" :compartment "work"
-                        :plaintext (.getBytes "x" "UTF-8")}
+                        :plaintext (kbytes/utf8-bytes "x")}
                  (assoc owner :purpose :seed))
           rv (run actor {:op :item/reveal :item-id "k3"} owner)]
       (is (= :held (get-in rv [:result :effect]))))))
@@ -63,7 +63,7 @@
           owner {:did (:did id) :role :owner :phase 1
                  :vmk (crypto/rand-bytes cr 32) :purpose :daily-use}
           _ (run actor {:op :item/create :item-id "a" :compartment "work"
-                        :plaintext (.getBytes "x" "UTF-8")} owner)
+                        :plaintext (kbytes/utf8-bytes "x")} owner)
           _ (run actor {:op :item/reveal :item-id "a"} owner)
           _ (run actor {:op :item/reveal :item-id "a"}
                  {:did "did:key:zV" :role :viewer :phase 1 :purpose :audit}) ; → hold
@@ -87,7 +87,7 @@
                   :vmk (crypto/rand-bytes cr 32) :purpose :daily-use :consent? true}
           secret "ghp_shared_token"
           _ (run actor {:op :item/create :item-id "sh" :compartment "work"
-                        :plaintext (.getBytes secret "UTF-8")} owner)
+                        :plaintext (kbytes/utf8-bytes secret)} owner)
           _ (run actor {:op :share/grant :item-id "sh" :recipient-did rdid} owner)
           grant (first (store/grants-of st "sh"))
           it    (store/item st "sh")
@@ -97,7 +97,7 @@
                                   (store/block-get st (:item/cid it))
                                   (vault/item-aad "sh"))]
       (is (= rdid (:grant/recipient grant)))
-      (is (= secret (String. ^bytes pt "UTF-8")) "受信者が PQC envelope から平文を復元"))))
+      (is (= secret (kbytes/utf8-string ^bytes pt)) "受信者が PQC envelope から平文を復元"))))
 
 (deftest authn-self-registers-member
   (testing "authn が :register(member-record)を depth-1 self-mint で登録する"
@@ -147,7 +147,7 @@
                  :vmk (crypto/rand-bytes cr 32) :purpose :daily-use :consent? true}
           secret "ghp_real_identities"
           _ (run actor {:op :item/create :item-id "ri" :compartment "work"
-                        :plaintext (.getBytes secret "UTF-8")} owner)
+                        :plaintext (kbytes/utf8-bytes secret)} owner)
           _ (run actor {:op :share/grant :item-id "ri" :recipient-did (:did recip-id)} owner)
           grant (first (store/grants-of st "ri"))
           it    (store/item st "ri")
@@ -155,7 +155,7 @@
           pt    (crypto/open-item cr dek (:item/nonce it)
                                   (store/block-get st (:item/cid it)) (vault/item-aad "ri"))]
       (is (= (:did recip-id) (:grant/recipient grant)))
-      (is (= secret (String. ^bytes pt "UTF-8"))
+      (is (= secret (kbytes/utf8-string ^bytes pt))
           "受信者は自分の identity 秘密鍵だけで PQC envelope を開ける"))))
 
 (deftest revoke-rotates-dek-and-reenvelopes-remaining-recipients
@@ -172,7 +172,7 @@
         owner {:did (:did owner-id) :role :owner :phase 3
                :vmk (crypto/rand-bytes cr 32) :purpose :revoke :consent? true}
         _ (run actor {:op :item/create :item-id "shared" :compartment "work"
-                      :plaintext (.getBytes "rotated-secret" "UTF-8")} owner)
+                      :plaintext (kbytes/utf8-bytes "rotated-secret")} owner)
         _ (run actor {:op :share/grant :item-id "shared" :recipient-did (:did r1)} owner)
         _ (run actor {:op :share/grant :item-id "shared" :recipient-did (:did r2)} owner)
         old-item (store/item st "shared")
@@ -189,7 +189,7 @@
     (is (= (inc (:item/version old-item)) (:item/version next-item)))
     (is (:grant/revoked g1))
     (is (= (:item/key-epoch next-item) (:grant/key-epoch g2)))
-    (is (= "rotated-secret" (String. ^bytes pt2 "UTF-8")))
+    (is (= "rotated-secret" (kbytes/utf8-string ^bytes pt2)))
     (is (thrown? Exception
                  (crypto/accept-share cr (identity/kem-secret r1)
                                       (:grant/envelope g2))))))
@@ -201,7 +201,7 @@
                  :vmk (crypto/rand-bytes cr 32) :purpose :rotate}
           _ (run actor {:op :item/create :item-id "root" :compartment "work"
                         :category :root-credential
-                        :plaintext (.getBytes "root" "UTF-8")} owner)
+                        :plaintext (kbytes/utf8-bytes "root")} owner)
           rv (run actor {:op :item/reveal :item-id "root" :category :root-credential} owner)]
       ;; interrupt-before で停止 → result はまだ無い(承認で resume)
       (is (not= :revealed (get-in rv [:result :effect]))))))

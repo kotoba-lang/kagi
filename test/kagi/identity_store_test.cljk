@@ -1,5 +1,5 @@
 (ns kagi.identity-store-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.secret-store :as ss]
@@ -100,8 +100,8 @@
   (testing "既に別の identity が入っている ref を、黙って上書きしない"
     (let [store (ss/mem-secret-store)
           ref "keychain://test-identity/occupied"
-          dir (str (java.nio.file.Files/createTempDirectory
-                    "kagi-identity-guard" (make-array java.nio.file.attribute.FileAttribute 0)))
+          dir (str (kio/temp-dir
+                    "kagi-identity-guard"))
           path (str dir "/identity.edn")
           first-id (identity/generate-identity)
           second-id (identity/generate-identity)]

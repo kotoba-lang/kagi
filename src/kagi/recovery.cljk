@@ -1,9 +1,9 @@
 (ns kagi.recovery
   "Shamir threshold recovery for random VMKs over GF(256). Shares contain no
   usable VMK alone and carry a set id plus SHA-256 digest for mix-up/tamper detection."
-  (:require [cbor.core :as cbor]
+  (:require [kotoba.bytes :as kbytes] [cbor.core :as cbor]
             [kagi.crypto :as crypto])
-  (:import [java.util Base64 UUID]))
+  (:import [java.util UUID]))
 
 (defn- gf-mul [a b]
   (loop [a (bit-and a 0xff) b (bit-and b 0xff) out 0]
@@ -107,8 +107,8 @@
   (let [resolved (into {} (map (fn [member] [member (public-of member)]) members))
         missing (->> resolved (filter (comp nil? val)) (map key) set)
         fingerprints (map (fn [[_ public]]
-                            (.encodeToString (.withoutPadding (Base64/getUrlEncoder))
-                                             (crypto/sha256 (cbor/encode public))))
+                            (kbytes/base64url-encode
+                                             (crypto/sha256 (cbor/encode public)) {:pad? false}))
                           resolved)]
     (when (seq missing)
       (throw (ex-info (str label " policy has unresolved members") {:members missing})))

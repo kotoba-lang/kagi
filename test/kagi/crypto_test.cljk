@@ -1,7 +1,7 @@
 (ns kagi.crypto-test
   "AES-256-GCM/HKDFの標準KAT、hybrid ML-KEM/ML-DSA、Argon2id、item/DEKの
   roundtrip・negative・downgrade境界テスト。"
-  (:require [kotoba.test :refer [deftest testing is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest testing is]]
             [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [kagi.crypto :as crypto])
@@ -18,32 +18,32 @@
     (let [p (crypto/bc-provider)
           key (crypto/rand-bytes p 32)
           nonce (crypto/rand-bytes p 12)
-          pt (.getBytes "hello vault" "UTF-8")
-          aad (.getBytes "item:1" "UTF-8")
+          pt (kbytes/utf8-bytes "hello vault")
+          aad (kbytes/utf8-bytes "item:1")
           ct (crypto/aead-seal p key nonce pt aad)]
-      (is (= "hello vault" (String. ^bytes (crypto/aead-open p key nonce ct aad) "UTF-8")))
+      (is (= "hello vault" (kbytes/utf8-string ^bytes (crypto/aead-open p key nonce ct aad))))
       (is (thrown? Exception
-                   (crypto/aead-open p key nonce ct (.getBytes "item:2" "UTF-8")))))))
+                   (crypto/aead-open p key nonce ct (kbytes/utf8-bytes "item:2")))))))
 
 (deftest item-seal-and-wrap-roundtrip
   (testing "seal-item → wrap-dek → unwrap-dek → open-item が往復"
     (let [p (crypto/bc-provider)
           vmk (crypto/rand-bytes p 32)
           kek (crypto/compartment-key p vmk "work")
-          aad (.getBytes "item:gh" "UTF-8")
-          {:keys [dek nonce ciphertext]} (crypto/seal-item p (.getBytes "ghp_x" "UTF-8") aad)
+          aad (kbytes/utf8-bytes "item:gh")
+          {:keys [dek nonce ciphertext]} (crypto/seal-item p (kbytes/utf8-bytes "ghp_x") aad)
           wrap (crypto/wrap-dek p kek dek)
           dek2 (crypto/unwrap-dek p kek wrap)]
       (is (= (seq dek) (seq dek2)) "wrap/unwrap で DEK 復元")
-      (is (= "ghp_x" (String. ^bytes (crypto/open-item p dek2 nonce ciphertext aad) "UTF-8"))))))
+      (is (= "ghp_x" (kbytes/utf8-string ^bytes (crypto/open-item p dek2 nonce ciphertext aad)))))))
 
 (deftest hkdf-deterministic
   (testing "HKDF は決定的、info で分岐"
     (let [p (crypto/bc-provider)
           ikm (crypto/rand-bytes p 32)
-          a (crypto/hkdf p ikm (byte-array 0) (.getBytes "a" "UTF-8") 32)
-          a2 (crypto/hkdf p ikm (byte-array 0) (.getBytes "a" "UTF-8") 32)
-          b (crypto/hkdf p ikm (byte-array 0) (.getBytes "b" "UTF-8") 32)]
+          a (crypto/hkdf p ikm (byte-array 0) (kbytes/utf8-bytes "a") 32)
+          a2 (crypto/hkdf p ikm (byte-array 0) (kbytes/utf8-bytes "a") 32)
+          b (crypto/hkdf p ikm (byte-array 0) (kbytes/utf8-bytes "b") 32)]
       (is (= (seq a) (seq a2)))
       (is (not= (seq a) (seq b))))))
 
@@ -126,10 +126,10 @@
   (testing "Ed25519+ML-DSA-65 hybrid: 正署名は verify、改竄/片側破損は reject"
     (let [p (crypto/jvm-provider)
           {:keys [public secret]} (crypto/sign-keypair p)
-          msg (.getBytes "commit:item:gh:v1" "UTF-8")
+          msg (kbytes/utf8-bytes "commit:item:gh:v1")
           sig (crypto/sign* p secret msg)]
       (is (true? (crypto/verify* p public msg sig)) "両署名 valid → true")
-      (is (false? (crypto/verify* p public (.getBytes "tampered" "UTF-8") sig)) "msg 改竄 → false")
+      (is (false? (crypto/verify* p public (kbytes/utf8-bytes "tampered") sig)) "msg 改竄 → false")
       (is (false? (crypto/verify* p public msg (assoc sig :mldsa (byte-array (count (:mldsa sig))))))
           "片側(ML-DSA)破損 → false(両方必須)"))))
 
@@ -196,7 +196,7 @@
 (deftest argon2id-deterministic
   (testing "Argon2id は同入力で決定的、salt で分岐(軽量パラメータでテスト)"
     (let [p (crypto/jvm-provider)
-          pass (.getBytes "correct horse battery staple" "UTF-8")
+          pass (kbytes/utf8-bytes "correct horse battery staple")
           salt (crypto/rand-bytes p 16)
           prm {:m-kb 8192 :t 1 :p 1}
           k1 (crypto/argon2id p pass salt prm)

@@ -3,7 +3,7 @@
   TLS termination is expected at a reverse proxy; clients reject cleartext
   non-loopback URLs. Every received checkpoint is still cryptographically
   verified by WitnessService before persistence."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [kagi.persist :as persist]
             [kagi.witness :as witness]
             [kagi.witness-service :as service])
@@ -12,13 +12,12 @@
            [java.net InetSocketAddress URI]
            [java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
             HttpResponse$BodyHandlers]
-           [javax.net.ssl SSLContext]
-           [java.nio.charset StandardCharsets]))
+           [javax.net.ssl SSLContext]))
 
 (def max-request-bytes 1048576)
 
 (defn- reply! [^HttpExchange exchange status value]
-  (let [body (.getBytes (persist/->edn value) StandardCharsets/UTF_8)]
+  (let [body (kbytes/utf8-bytes (persist/->edn value))]
     (.set (.getResponseHeaders exchange) "content-type" "application/edn; charset=utf-8")
     (.sendResponseHeaders exchange status (alength body))
     (with-open [out (.getResponseBody exchange)] (.write out body))))
@@ -28,7 +27,7 @@
     (let [body (.readNBytes in (inc max-request-bytes))]
       (when (> (alength body) max-request-bytes)
         (throw (ex-info "witness request too large" {:max max-request-bytes})))
-      (persist/<-edn (String. body StandardCharsets/UTF_8)))))
+      (persist/<-edn (kbytes/utf8-string body)))))
 
 (defn- handler [witness-service]
   (reify HttpHandler

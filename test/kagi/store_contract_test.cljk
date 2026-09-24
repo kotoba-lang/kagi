@@ -1,7 +1,7 @@
 (ns kagi.store-contract-test
   "Store contract。MemStore で検証し、同じ deftest を KotobaStore(:db-api 配線後)へ
   再利用する(MemStore ≡ KotobaStore)。"
-  (:require [kotoba.test :refer [deftest testing is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest testing is]]
             [kagi.store :as store]
             [kagi.ledger :as ledger]
             [kagi.crypto :as crypto]))
@@ -63,8 +63,8 @@
           blocks (store/memory-sealed-block-store)
           st (store/kotoba-store (fake-db-api db) ::connection blocks)
           p (crypto/jvm-provider)
-          aad (.getBytes "fixture-item" "UTF-8")
-          plaintext (.getBytes "synthetic-not-a-real-secret" "UTF-8")
+          aad (kbytes/utf8-bytes "fixture-item")
+          plaintext (kbytes/utf8-bytes "synthetic-not-a-real-secret")
           sealed (crypto/seal-item p plaintext aad)
           dek (:dek sealed)
           cid "cid:fixture-ciphertext"]

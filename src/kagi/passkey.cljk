@@ -1,10 +1,10 @@
 (ns kagi.passkey
   "Narrow browser-to-JVM boundary for WebAuthn PRF results. The returned PRF
   bytes are secret and must be consumed immediately, never persisted or logged."
-  (:import [java.util Base64]))
+  (:require [kotoba.bytes :as kbytes]))
 
 (defn- decode ^bytes [value field]
-  (try (.decode (Base64/getUrlDecoder) ^String value)
+  (try (kbytes/base64url-decode-bytes ^String value)
        (catch Exception e
          (throw (ex-info "invalid passkey bridge encoding" {:field field} e)))))
 

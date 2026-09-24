@@ -1,10 +1,9 @@
 (ns kagi.cacao-test
   "自己発行 CACAO の mint→verify 往復・改竄検知・audience 照合。"
-  (:require [kotoba.lang.text] [kotoba.test :refer [deftest testing is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text] [kotoba.test :refer [deftest testing is]]
             [kagi.cacao :as cacao]
             [kagi.identity :as identity]
-            [ed25519.core :as ed25519])
-  (:import [java.util Base64]))
+            [ed25519.core :as ed25519]))
 
 (deftest mint-verify-roundtrip
   (testing "actor が自分の鍵で mint した CACAO を verify が通す(iss=自 did)"
@@ -26,10 +25,10 @@
     ;; reconstructed SIWE message; signature corruption fails directly).
     (let [id  (identity/generate-identity)
           tok (cacao/mint id {:cap :cap/read :scope (:graph id)} {:aud "u" :nonce "n"})
-          raw (.decode (Base64/getDecoder) tok)
+          raw (kbytes/base64-decode-bytes tok)
           i   (quot (alength raw) 2)
           _   (aset-byte raw i (unchecked-byte (bit-xor (aget raw i) 1)))
-          bad (.encodeToString (Base64/getEncoder) raw)]
+          bad (kbytes/base64-encode raw)]
       (is (false? (:ok? (cacao/verify bad)))))))
 
 (deftest wrong-audience-rejected
