@@ -1,0 +1,50 @@
+;; kagi-env — hand revealed values to a calling process (kbb, sci on Node; no JVM).
+;;
+;;   cd <kagi checkout>
+;;   kbb --backend sci --classpath src bin/kagi-env.cljk --purpose <why> <item-id> [<item-id> …]
+;;
+;; For programs that place secrets where a service reads them (e.g.
+;; com-junkawasaki/root scripts/hermes-profile-repo.cljk `secrets`, which
+;; writes a Hermes bot's .env). Opens the vault once (KAGI_HOME or ~/.kagi;
+;; unlock via OS keychain or KAGI_MASTER, never a prompt), reveals each named
+;; item through the same `kagi.operation` governor graph `kagi get` uses, with
+;; the given purpose on the ledger, and writes ONE EDN map to stdout:
+;;
+;;   {"<id>" "<plaintext>" | :absent | :denied, …}
+;;
+;; It refuses when stdout is a terminal: values go to the caller, not a screen
+;; or a scrollback. It does not list items and does not write vault.edn or
+;; identity.edn. kagi-read.cljk is the status-only sibling for smoke tests.
+;;
+;; Exit: 0 map written (per-item status inside) · 2 vault not openable here
+;; (`VAULT absent|locked` on stderr) · 64 usage · 65 stdout is a terminal.
+(ns kagi-env
+  (:require [kagi.vault-read :as vr]))
+
+(defn- err [& xs] (binding [*print-fn* *print-err-fn*] (apply println xs)))
+
+(defn- parse [args]
+  (loop [[a & more] args opts {:ids []}]
+    (cond (nil? a) opts
+          (= a "--purpose") (recur (rest more) (assoc opts :purpose (first more)))
+          :else (recur more (update opts :ids conj a)))))
+
+(defn run [args]
+  (let [{:keys [ids purpose]} (parse args)]
+    (cond
+      (or (empty? ids) (empty? purpose))
+      (do (err "usage: kbb --backend sci --classpath src bin/kagi-env.cljk --purpose <why> <item-id> …") 64)
+      (.-isTTY js/process.stdout)
+      (do (err "refusing: stdout is a terminal; kagi-env hands values to a program, not a screen") 65)
+      :else
+      (let [session (vr/open)]
+        (if (not= :open (:status session))
+          (do (err "VAULT" (name (:status session))) 2)
+          (let [results (vr/reveal-many session ids purpose)]
+            (print (pr-str (into {} (for [id ids]
+                                      (let [r (get results id)]
+                                        [id (cond (string? r) r (= :absent r) :absent :else :denied)])))))
+            (flush)
+            0))))))
+
+(set! (.-exitCode js/process) (run *command-line-args*))
