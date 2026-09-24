@@ -3,7 +3,7 @@
 
   The first bricked a live vault outright: every command, including the one
   the error message named as the remedy, exited non-zero."
-  (:require [clojure.edn]
+  (:require [kotoba.lang.edn]
             [kotoba.test :refer [deftest is testing]]
             [kagi.cli :as cli]
             [kagi.crypto :as crypto]
@@ -124,7 +124,7 @@
     (let [f (str (java.io.File. (tmp-dir "kagi-record5") "refs.edn"))]
       (#'cli/record-reference! f {:item "x" :compartment "personal"
                                   :category :login :did "did:key:z1" :now "t"})
-      (is (map? (clojure.edn/read-string (slurp f)))))))
+      (is (map? (kotoba.lang.edn/read-string (slurp f)))))))
 
 (deftest a-mistyped-category-is-rejected-rather-than-stored
   (testing "the index is only worth having if it is shared; a typo would file

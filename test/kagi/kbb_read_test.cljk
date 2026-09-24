@@ -10,7 +10,7 @@
   JVM:  kbb -M:test -n kagi.kbb-read-test"
   (:require #?(:clj [kotoba.test :refer [deftest is testing]]
                :cljs [cljs.test :refer [deftest is testing run-tests] :include-macros true])
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [kagi.b64 :as b64]
             [kagi.persist :as persist]
             [kagi.secret-store :as ss]

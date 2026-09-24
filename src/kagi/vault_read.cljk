@@ -36,7 +36,7 @@
   `execFileSync` で叩き、crypto は `kagi.crypto.noble`（JVM provider と transcript
   互換）。identity は `identity/load-existing-identity` で **読むだけ**（生成しない・
   identity.edn を書き戻さない）。reveal は JVM と同じ `kagi.operation` グラフを通る。"
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [kotoba.lang.text :as str]
             [kagi.cacao :as cacao]
             [kagi.crypto :as crypto]
