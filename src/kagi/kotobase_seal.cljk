@@ -3,9 +3,9 @@
 
   This namespace deliberately depends only on Kagi. Consumers pass the result
   of `sealed-store-options` to Kotobase, avoiding a dependency cycle."
-  (:require [kagi.crypto :as crypto]
+  (:require [kotoba.bytes :as kbytes] [kagi.crypto :as crypto]
             [kagi.persist :as persist])
-  (:import [java.nio.charset StandardCharsets]
+  (:import
            [java.security MessageDigest]))
 
 (def algorithms [:x25519 :ml-kem-768 :aes-256-gcm])
@@ -20,8 +20,7 @@
   (str "sha256:" (hex (sha256 ciphertext))))
 
 (defn- aad ^bytes [compartment]
-  (.getBytes ^String (str "kagi/kotobase-sealed-store/v1\u0000" compartment)
-             StandardCharsets/UTF_8))
+  (kbytes/utf8-bytes ^String (str "kagi/kotobase-sealed-store/v1\u0000" compartment)))
 
 (defn sealed-store-options
   "Build fail-closed seal/unseal callbacks for one opaque user compartment.
@@ -43,8 +42,7 @@
      (fn [plaintext]
        (let [{:keys [dek nonce ciphertext]}
              (crypto/seal-item
-              provider (.getBytes ^String (persist/->edn plaintext)
-                                  StandardCharsets/UTF_8)
+              provider (kbytes/utf8-bytes ^String (persist/->edn plaintext))
               aad*)]
          {:envelope/algorithms algorithms
           :envelope/provider {:provider/id :kagi
@@ -65,4 +63,4 @@
                          {:type :kagi/sealed-compartment-mismatch})))
        (let [dek (crypto/unwrap-dek provider kek wrap)
              plaintext (crypto/open-item provider dek nonce ciphertext aad*)]
-         (persist/<-edn (String. plaintext StandardCharsets/UTF_8))))}))
+         (persist/<-edn (kbytes/utf8-string plaintext))))}))

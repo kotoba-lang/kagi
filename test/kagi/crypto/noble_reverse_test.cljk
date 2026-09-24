@@ -7,17 +7,16 @@
   noble の raw 鍵に DER prefix を付け忘れる/間違える類の誤りである。
 
   再生成: npm install && npm run test:cljs"
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as io]
             [kotoba.lang.edn :as edn]
             [kotoba.test :refer [deftest is testing]]
-            [kagi.crypto :as c])
-  (:import [java.util Base64]))
+            [kagi.crypto :as c]))
 
-(defn- unb64 ^bytes [s] (.decode (Base64/getDecoder) ^String s))
+(defn- unb64 ^bytes [s] (kbytes/base64-decode-bytes ^String s))
 
 (def vectors
   (let [f (io/file "test/fixtures/noble-crypto-vectors.edn")]
-    (when (.exists f) (edn/read-string (slurp f)))))
+    (when (io/exists? f) (edn/read-string (slurp f)))))
 
 (def ^:private p (delay (c/jvm-provider)))
 

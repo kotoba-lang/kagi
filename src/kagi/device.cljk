@@ -42,7 +42,7 @@
   kagi does not implement yet (`rotate` rotates an item DEK, not the VMK).
   `revoke` is therefore an access-list change, and the docstring on
   `revoke-device` says so where an operator will actually read it."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [kagi.crypto :as crypto]
             [kagi.secret-store :as secret-store]
             [kagi.unlock :as unlock])
@@ -93,7 +93,7 @@
   right'. Derived from the full public key, so substituting the key changes
   it."
   [public-key]
-  (let [material (crypto/sha256 (.getBytes (pr-str (b64-map public-key)) "UTF-8"))
+  (let [material (crypto/sha256 (kbytes/utf8-bytes (pr-str (b64-map public-key))))
         alphabet "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  ; no I/O/0/1
         chars (map #(nth alphabet (mod (bit-and (int %) 0xff) 32)) (take 24 material))]
     (->> chars (partition 4) (map #(apply str %)) (str/join "-"))))

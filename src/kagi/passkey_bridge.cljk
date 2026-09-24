@@ -1,19 +1,17 @@
 (ns kagi.passkey-bridge
   "One-shot loopback-only browser bridge for WebAuthn PRF registration."
-  (:require [json.data-json :as json]
+  (:require [kotoba.bytes :as kbytes] [json.data-json :as json]
             [kagi.crypto :as crypto])
   (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
            [java.io ByteArrayOutputStream]
            [java.net InetAddress InetSocketAddress]
-           [java.nio.charset StandardCharsets]
-           [java.util Base64]
            [java.util.concurrent Executors ThreadFactory TimeUnit]))
 
 (defn- token [p]
-  (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) (crypto/rand-bytes p 32)))
+  (kbytes/base64url-encode (crypto/rand-bytes p 32) {:pad? false}))
 
 (defn- respond! [^HttpExchange exchange status content-type body]
-  (let [body (.getBytes ^String body StandardCharsets/UTF_8)]
+  (let [body (kbytes/utf8-bytes ^String body)]
     (.set (.getResponseHeaders exchange) "content-type" content-type)
     (.set (.getResponseHeaders exchange) "cache-control" "no-store")
     (.set (.getResponseHeaders exchange) "content-security-policy"

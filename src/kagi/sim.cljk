@@ -1,7 +1,7 @@
 (ns kagi.sim
   "デモドライバ。1 つの VaultActor に複数 op を通し、Governor verdict と台帳を見せる。
   実行: kbb -M:dev:run"
-  (:require [langgraph.graph :as g]
+  (:require [kotoba.bytes :as kbytes] [langgraph.graph :as g]
             [kagi.operation :as op]
             [kagi.store :as store]
             [kagi.ledger :as ledger]
@@ -23,13 +23,13 @@
     (println "graph(IPNS):" (:graph id))
     (println "── create(owner, phase 1) ──")
     (let [r (run-op actor {:op :item/create :item-id "gh-token"
-                           :compartment "work" :plaintext (.getBytes "ghp_demo_secret" "UTF-8")}
+                           :compartment "work" :plaintext (kbytes/utf8-bytes "ghp_demo_secret")}
                     owner)]
       (println "  result:" (:result r)))
     (println "── reveal(owner, purpose=daily-use) ──")
     (let [r (run-op actor {:op :item/reveal :item-id "gh-token"} owner)]
       (println "  revealed:" (when-let [pt (get-in r [:result :plaintext])]
-                               (String. ^bytes pt "UTF-8"))))
+                               (kbytes/utf8-string ^bytes pt))))
     (println "── reveal(viewer, NO grant) → HOLD ──")
     (let [r (run-op actor {:op :item/reveal :item-id "gh-token"}
                     {:did "did:key:zViewer" :role :viewer :phase 1 :purpose :audit})]

@@ -7,7 +7,7 @@
   the production path. `kagi.storj-block-store-test` makes the same argument
   for the sealed-block seam and gives the reason: a fake-only test passes while
   the two sides disagree about what a byte is."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.http.form-urlencoded :as form-urlencoded] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is testing]]
             [kagi.object-store :as object-store]
             [kagi.persist :as persist]
@@ -42,9 +42,8 @@
      (reify HttpHandler
        (handle [_ ex]
          (try
-           (let [k (java.net.URLDecoder/decode
-                    (str/replace (.getPath (.getRequestURI ex)) (re-pattern (str "^/" bucket "/")) "")
-                    "UTF-8")
+           (let [k (form-urlencoded/form-decode
+                    (str/replace (.getPath (.getRequestURI ex)) (re-pattern (str "^/" bucket "/")) ""))
                  method (.getRequestMethod ex)]
              (case method
                "PUT" (let [body (read-all ex)]

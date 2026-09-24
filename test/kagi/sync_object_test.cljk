@@ -4,7 +4,7 @@
   The fake is four functions over an atom because that IS the contract —
   `kagi.store/object-sealed-block-store` takes the same four, and a test that
   needed a real S3 would be testing Backblaze rather than this code."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest testing is]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
@@ -60,7 +60,7 @@
         actor (op/build st {:crypto p :signer (identity/sign-secret owner)})]
     (g/run* actor
             {:request {:op :item/create :item-id "k" :compartment "ops"
-                       :plaintext (.getBytes ^String secret "UTF-8")}
+                       :plaintext (kbytes/utf8-bytes ^String secret)}
              :context {:did (:did owner) :role :owner :phase 3 :vmk vmk :purpose :seed
                        :now (str (.truncatedTo (Instant/now) ChronoUnit/SECONDS))
                        :register (identity/member-record owner :owner)}}
@@ -88,8 +88,7 @@
           {:keys [path]} (vault-with "plaintext-that-must-not-appear")]
       (sync/object-push! {:fns fns :did did :vault-path path})
       (let [everything (str/join " " (map (fn [[k v]]
-                                            (str k " " (String. (byte-array (map unchecked-byte v))
-                                                                "UTF-8")))
+                                            (str k " " (kbytes/utf8-string (byte-array (map unchecked-byte v)))))
                                           @a))]
         (is (not (str/includes? everything "plaintext-that-must-not-appear")))))))
 
@@ -174,9 +173,8 @@
       (sync/object-push! {:fns fns :did did :vault-path path})
       (is (contains? @a (str "kagi/" did "/catalog/v1.edn")))
       (is (contains? @a (str "kagi/" did "/catalog/v2.edn")))
-      (is (= 2 (:seq (persist/<-edn (String. (byte-array (map unchecked-byte
-                                                              (get @a (str "kagi/" did "/catalog/HEAD"))))
-                                             "UTF-8"))))))))
+      (is (= 2 (:seq (persist/<-edn (kbytes/utf8-string (byte-array (map unchecked-byte
+                                                              (get @a (str "kagi/" did "/catalog/HEAD"))))))))))))
 
 (deftest the-prefix-and-did-scope-the-keys
   (testing "DID が tenant 境界 — 別の vault のキーに触らない"

@@ -1,12 +1,12 @@
 (ns kagi.repository-context-test
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as io]
             [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.persist :as persist]
             [kagi.repository-context :as context]
             [kagi.secret-store :as secret-store])
-  (:import [java.nio.file Files]
+  (:import
            [java.util Arrays]))
 
 (deftest missing-vault-fails-before-unlock
@@ -17,14 +17,13 @@
                                    "/kagi-missing-repository-context")}))))
 
 (deftest repository-runtime-refuses-development-plaintext-identity
-  (let [home (.toFile (Files/createTempDirectory
-                       "kagi-repository-plaintext-identity"
-                       (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [home (io/temp-dir
+                       "kagi-repository-plaintext-identity")
         provider (crypto/jvm-provider)
         vmk (crypto/rand-bytes provider 32)]
-    (persist/save! (.getPath (io/file home "vault.edn")) {:meta {}})
+    (persist/save! (io/path (io/file home "vault.edn")) {:meta {}})
     (identity/load-or-create-identity!
-     (.getPath (io/file home "identity.edn")) provider
+     (io/path (io/file home "identity.edn")) provider
      {:allow-plaintext? true})
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo #"SecretStore-backed"
@@ -33,15 +32,14 @@
            :unlock-vmk-fn (fn [_ _] vmk)})))))
 
 (deftest explicit-host-unlock-builds-repository-context
-  (let [home (.toFile (Files/createTempDirectory
-                       "kagi-repository-context"
-                       (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [home (io/temp-dir
+                       "kagi-repository-context")
         provider (crypto/jvm-provider)
         secrets (secret-store/mem-secret-store)
         vmk (crypto/rand-bytes provider 32)]
-    (persist/save! (.getPath (io/file home "vault.edn")) {:meta {}})
+    (persist/save! (io/path (io/file home "vault.edn")) {:meta {}})
     (identity/load-or-create-identity!
-     (.getPath (io/file home "identity.edn")) provider
+     (io/path (io/file home "identity.edn")) provider
      {:secret-store secrets :secret-ref "mem://identity/context"})
     (let [loaded (context/load-context
                   {:vault-home home :provider provider
@@ -54,16 +52,15 @@
       (is (map? (:signing-public loaded))))))
 
 (deftest repository-vmk-rotation-retains-old-epochs-wrapped
-  (let [home (.toFile (Files/createTempDirectory
-                       "kagi-repository-keyring"
-                       (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [home (io/temp-dir
+                       "kagi-repository-keyring")
         provider (crypto/jvm-provider)
         secrets (secret-store/mem-secret-store)
         root-vmk (crypto/rand-bytes provider 32)
         unlock-fn (fn [_ _] root-vmk)]
-    (persist/save! (.getPath (io/file home "vault.edn")) {:meta {}})
+    (persist/save! (io/path (io/file home "vault.edn")) {:meta {}})
     (identity/load-or-create-identity!
-     (.getPath (io/file home "identity.edn")) provider
+     (io/path (io/file home "identity.edn")) provider
      {:secret-store secrets :secret-ref "mem://identity/keyring"})
     (let [staged (context/prepare-repository-vmk-rotation
                   {:vault-home home :provider provider
@@ -101,7 +98,7 @@
       (is (Arrays/equals root-vmk (:vmk old)))
       (is (Arrays/equals (:vmk rotated) (:vmk reloaded)))
       (is (not (.contains raw-vault
-                          (.encodeToString (java.util.Base64/getEncoder)
+                          (kbytes/base64-encode
                                            ^bytes (:vmk rotated)))))
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo #"stale"
@@ -117,15 +114,14 @@
         secrets (secret-store/mem-secret-store)
         unlock-fn (fn [_ _] root-vmk)
         new-home (fn [prefix]
-                   (let [home (.toFile (Files/createTempDirectory
-                                        prefix
-                                        (make-array java.nio.file.attribute.FileAttribute 0)))]
-                     (persist/save! (.getPath (io/file home "vault.edn")) {:meta {}})
+                   (let [home (io/temp-dir
+                                        prefix)]
+                     (persist/save! (io/path (io/file home "vault.edn")) {:meta {}})
                      home))
         device-a (new-home "kagi-key-device-a")
         device-b (new-home "kagi-key-device-b")
         _ (identity/load-or-create-identity!
-           (.getPath (io/file device-a "identity.edn")) provider
+           (io/path (io/file device-a "identity.edn")) provider
            {:secret-store secrets
             :secret-ref "mem://identity/shared-device"})
         _ (spit (io/file device-b "identity.edn")

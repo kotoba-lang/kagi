@@ -1,5 +1,5 @@
 (ns kagi.vault-read-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.operation :as op]
@@ -24,7 +24,7 @@
   (let [actor (op/build store {:crypto provider})]
     (g/run* actor
             {:request {:op :item/create :item-id item-id :compartment compartment
-                       :category category :plaintext (.getBytes ^String plaintext "UTF-8")}
+                       :category category :plaintext (kbytes/utf8-bytes ^String plaintext)}
              :context {:did (:did identity) :role :owner :phase 1 :vmk vmk
                        :purpose :daily-use}}
             {:thread-id (str "seed-" item-id)})))

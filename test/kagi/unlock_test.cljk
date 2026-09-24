@@ -1,5 +1,5 @@
 (ns kagi.unlock-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.secret-store :as secret-store]
             [kagi.unlock :as unlock]))
@@ -12,7 +12,7 @@
           ref "keychain://com.junkawasaki.kagi/test-vmk"
           wrap (unlock/os-keychain-wrap p vmk store ref)
           secret (secret-store/get-secret store ref {})
-          vmk2 (unlock/unwrap-vmk p wrap (.getBytes ^String secret "UTF-8"))]
+          vmk2 (unlock/unwrap-vmk p wrap (kbytes/utf8-bytes ^String secret))]
       (is (= :os-keychain (:method wrap)))
       (is (= ref (:ref wrap)))
       (is (= (seq vmk) (seq vmk2)))
