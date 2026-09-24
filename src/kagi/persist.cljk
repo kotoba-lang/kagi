@@ -5,7 +5,7 @@
   ;; only. `save!` is JVM-only on purpose — the kbb path is the read seam
   ;; (kagi.vault-read) and must not be able to write vault.edn.
   (:require [clojure.walk :as walk]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             #?(:cljs ["node:fs" :as fs]))
   #?(:clj
      (:import [java.util Base64]

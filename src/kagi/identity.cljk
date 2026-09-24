@@ -10,7 +10,7 @@
   ;; only: `load-existing-identity` (never creates), `sign-secret`,
   ;; `sign-public`, `member-record`, `kem-public`/`kem-secret`. Generation,
   ;; migration and native (token-backed) signing stay JVM-only.
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [ed25519.core :as ed25519]
             [ipns.core :as ipns]
             [kagi.b64 :as b64*]
