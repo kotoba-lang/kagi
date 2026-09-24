@@ -27,7 +27,15 @@
   行為で、**本人の app が本人に本人の item 一覧を見せること**とは別物
   （1Password のリスト画面がまさにそれ）。区別が保たれるのは列挙が復号を
   伴わないから: `items` はメタデータだけを返し、平文は `reveal` を明示的に
-  呼んだ item にしか現れない。"
+  呼んだ item にしか現れない。
+
+  ## kbb（JVM-free）
+
+  `:cljs` 分岐は kbb（sci on Node, ADR-2609112000）で同じ seam を動かす: vault.edn は
+  `node:fs` で読むだけ、unlock は同じ `security find-generic-password` を
+  `execFileSync` で叩き、crypto は `kagi.crypto.noble`（JVM provider と transcript
+  互換）。identity は `identity/load-existing-identity` で **読むだけ**（生成しない・
+  identity.edn を書き戻さない）。reveal は JVM と同じ `kagi.operation` グラフを通る。"
   (:require [clojure.edn :as edn]
             [kotoba.lang.text :as str]
             [kagi.cacao :as cacao]
@@ -38,23 +46,47 @@
             [kagi.store :as store]
             [kagi.unlock :as unlock]
             [kagitaba.field :as field]
-            [langgraph.graph :as g])
-  (:import [java.time Instant]
-           [java.util UUID]))
+            [langgraph.graph :as g]
+            #?@(:cljs [["node:crypto" :as ncrypto]
+                       ["node:fs" :as fs]
+                       ["node:os" :as os]]))
+  #?(:clj
+     (:import [java.time Instant]
+              [java.util UUID])))
+
+(defn- getenv [k]
+  #?(:clj (System/getenv k)
+     :cljs (aget (.-env js/process) k)))
+
+(defn- user-home []
+  #?(:clj (System/getProperty "user.home")
+     :cljs (os/homedir)))
+
+(defn- file-exists? [path]
+  #?(:clj (.exists (java.io.File. ^String path))
+     :cljs (boolean (fs/existsSync path))))
+
+(defn- random-uuid* []
+  #?(:clj (str (UUID/randomUUID))
+     :cljs (ncrypto/randomUUID)))
+
+(defn- utf8-string [pt]
+  #?(:clj (String. ^bytes pt "UTF-8")
+     :cljs (.decode (js/TextDecoder. "utf-8") pt)))
 
 (def ^:private aud "https://kotobase.net")
 
 (defn vault-home
   "vault の置き場所（ADR-2607170500）。repo checkout の中には決して置かない。"
   []
-  (or (not-empty (System/getenv "KAGI_HOME"))
-      (str (System/getProperty "user.home") "/.kagi")))
+  (or (not-empty (getenv "KAGI_HOME"))
+      (str (user-home) "/.kagi")))
 
 (defn vault-present?
   "この機械に vault があるか。無いことは異常ではない（まだ `kagi init`
   していないだけ）ので、呼び出し側が例外ではなく状態として扱えるようにする。"
   []
-  (.exists (java.io.File. (str (vault-home) "/vault.edn"))))
+  (file-exists? (str (vault-home) "/vault.edn")))
 
 (defn- unlock-with-passphrase
   "master passphrase 経由。envelope は `:unlock/wraps` ではなく meta 直下の
@@ -63,17 +95,17 @@
   [p pass meta]
   (try
     (crypto/aead-open p
-                      (crypto/argon2id p (.getBytes ^String pass "UTF-8") (:salt meta)
+                      (crypto/argon2id p (crypto/utf8-bytes pass) (:salt meta)
                                        {:m-kb 262144 :t 3 :p 4})
-                      (:nonce meta) (:wrapped meta) (byte-array 0))
-    (catch Exception _ nil)))
+                      (:nonce meta) (:wrapped meta) (crypto/empty-bytes))
+    (catch #?(:clj Exception :cljs :default) _ nil)))
 
 (defn- unlock-vmk
   "OS keychain → `KAGI_MASTER` の順。どちらも無ければ nil を返す
   （例外ではなく `:locked` として表現できるように）。プロンプトは出さない。"
   [p meta]
-  (or (unlock/unlock-with-os-keychain p meta (not-empty (System/getenv "KAGI_UNLOCK_REF")))
-      (when-let [pass (not-empty (System/getenv "KAGI_MASTER"))]
+  (or (unlock/unlock-with-os-keychain p meta (not-empty (getenv "KAGI_UNLOCK_REF")))
+      (when-let [pass (not-empty (getenv "KAGI_MASTER"))]
         (unlock-with-passphrase p pass meta))))
 
 (defn open
@@ -88,16 +120,19 @@
    (let [path (str home "/vault.edn")
          id-path (str home "/identity.edn")
          data (persist/load* path)]
-     (if-not (and data (.exists (java.io.File. id-path)))
+     (if-not (and data (file-exists? id-path))
       ;; identity が無いのに identity を「作る」ことはしない。読むだけの経路が
       ;; 新しい did を生やすと、それは vault を開く鍵ではない別人になる
       ;; （ADR-2607170500 の消失モードそのもの）。
        {:status :absent :vault-home home}
-       (let [p (crypto/jvm-provider)
-             id (identity/load-or-create-identity!
-                 id-path p
-                 (when-let [ref (not-empty (System/getenv "KAGI_IDENTITY_REF"))]
-                   {:secret-ref ref}))
+       (let [p #?(:clj (crypto/jvm-provider) :cljs (crypto/default-provider))
+             id #?(:clj (identity/load-or-create-identity!
+                         id-path p
+                         (when-let [ref (not-empty (getenv "KAGI_IDENTITY_REF"))]
+                           {:secret-ref ref}))
+                   ;; kbb: load only. identity.edn is known to exist (checked
+                   ;; above); this never generates and never writes it back.
+                   :cljs (identity/load-existing-identity id-path))
              vmk (unlock-vmk p (:meta data))]
          (if-not vmk
            {:status :locked :vault-home home :did (:did id)}
@@ -124,9 +159,11 @@
   {:did (:did id) :role :owner :phase 3 :vmk vmk :purpose purpose
    :aud aud
    :cacao (cacao/mint id {:cap :cap/admin :scope (:graph id)}
-                      {:aud aud :nonce (str (UUID/randomUUID))
-                       :issued-at (str (Instant/now))
-                       :expiry (str (.plusSeconds (Instant/now) 3600))})
+                      {:aud aud :nonce (random-uuid*)
+                       :issued-at #?(:clj (str (Instant/now))
+                                     :cljs (.toISOString (js/Date.)))
+                       :expiry #?(:clj (str (.plusSeconds (Instant/now) 3600))
+                                  :cljs (.toISOString (js/Date. (+ (js/Date.now) 3600000))))})
    :register (identity/member-record id :owner)})
 
 (defn reveal
@@ -141,9 +178,31 @@
           r (:state (g/run* actor
                             {:request {:op :item/reveal :item-id item-id}
                              :context (context identity vmk purpose)}
-                            {:thread-id (str "reveal-" item-id "-" (UUID/randomUUID))}))]
+                            {:thread-id (str "reveal-" item-id "-" (random-uuid*))}))]
       (when-let [pt (get-in r [:result :plaintext])]
-        (String. ^bytes pt "UTF-8")))))
+        (utf8-string pt)))))
+
+(defn reveal-many
+  "1 回の `open`（= 1 回の unlock）で複数 item を governor 経由で開く。
+
+  戻り値は `{item-id <平文文字列> | :absent | :denied}`。3 つは区別される:
+  `:absent` はそんな item が無い、`:denied` は governor が拒否した（または
+  復号できなかった）。session が open でなければ nil —— 呼び出し側は先に
+  `(:status session)` を見て `:absent` / `:locked` を描く。
+
+  平文は呼び出し側のヒープにだけ残る。この関数は何も印字しない。"
+  [session item-ids purpose]
+  (when (= :open (:status session))
+    (into {}
+          (map (fn [item-id]
+                 [item-id
+                  (cond
+                    (not (store/item (:store session) item-id)) :absent
+                    ;; An exception (corrupt block, provider failure) is NOT
+                    ;; folded into :denied — it propagates, so "could not
+                    ;; answer" never reads as "governor said no".
+                    :else (or (reveal session item-id purpose) :denied))]))
+          item-ids)))
 
 (defn strip-sensitive
   "kagitaba item から機微値型の field 値を落とす。field 自体は残す——
@@ -169,7 +228,7 @@
   (try
     (let [v (edn/read-string plaintext)]
       (when (and (map? v) (:item/category v)) v))
-    (catch Exception _ nil)))
+    (catch #?(:clj Exception :cljs :default) _ nil)))
 
 (defn kagitaba-items
   "vault の中の kagitaba item を、機微値を落とした形で返す。
@@ -223,7 +282,7 @@
 (defn redact-home
   "表示用に vault path のホーム部分を伏せる。"
   [path]
-  (let [home (System/getProperty "user.home")]
+  (let [home (user-home)]
     (if (and home (str/starts-with? (str path) home))
       (str "~" (subs (str path) (count home)))
       (str path))))

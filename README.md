@@ -162,6 +162,11 @@ bin/kagi sync                         # pull後のremote seq一致時だけpush�
 ```
 
 - `bin/kagi` は JVM compat 層のラッパ: JDK 24+ を探し `:dev:cli` を Clojure CLI で起動する（PQC は JDK24 標準 provider を使うため kbb/sci・bb 不可。`.cljk` は起動時の classloader hook で読む）。JDK 24+ が無ければ exit 3。
+- **読むだけなら JVM は要らない**: `kagi.vault-read`（`open` / `reveal` / `reveal-many`）は kbb
+  （sci on Node）でも動く。crypto は `kagi.crypto.noble`、unlock は同じ OS keychain、reveal は同じ
+  `kagi.operation` governor グラフ、identity は読むだけ（生成しない・書き戻さない）。書き込み
+  （`add` / `rotate` / `save!`）は JVM のまま。smoke は値を出さず状態だけ出す:
+  `kbb --backend sci --classpath src bin/kagi-read.cljk <item-id>…` → `OK` / `ABSENT` / `DENIED`。
 - master passphrase は環境変数 **`KAGI_MASTER`** か端末プロンプト。`unlock-enable-keychain`
   後は device-local OS keychain unlock を先に試し、passphrase は recovery として残す。
 - 保存先は **`$KAGI_HOME`（既定 `~/.kagi`、repo 外）**（ADR-2607170500、2026-07-17）:
@@ -571,6 +576,8 @@ bin/kagi <cmd>        # CLI — kexe shim (本命; ADR 0002)。JVM route は
                       #   過渡期のみ: kbb --backend interpreter -m kagi.cli
 kbb --backend sci --classpath src:test -m kagi.crypto.noble-interop-test
                       # crypto 実測 (9/13 assert 緑, JVM-free)
+kbb --backend sci --classpath src:test -m kagi.kbb-read-test
+                      # 読み取り seam (b64 / persist / secret ref / governor 経由 reveal), JVM-free
 ```
 
 ### native kexe ビルド (ADR 0002)

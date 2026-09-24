@@ -5,9 +5,10 @@
   Compromise recovery deliberately does not trust the old key and is accepted only
   through an injected threshold/witness policy."
   (:require [cbor.core :as cbor]
-            [kagi.crypto :as crypto])
-  (:import [java.util Base64]
-           [java.time Instant]))
+            [kagi.b64 :as b64]
+            [kagi.crypto :as crypto]
+            #?(:cljs [kagi.digest :as digest]))
+  #?(:clj (:import [java.time Instant])))
 
 (def domain "kotoba/key-rotation/v1")
 (def ^:private signature-keys #{:rotation/old-signature :rotation/new-signature
@@ -19,9 +20,7 @@
   (cbor/encode (apply dissoc event signature-keys)))
 
 (defn event-id [event]
-  (-> (Base64/getUrlEncoder)
-      (.withoutPadding)
-      (.encodeToString (crypto/sha256 (signing-bytes event)))))
+  (b64/encode-url (#?(:clj crypto/sha256 :cljs digest/sha256-bytes) (signing-bytes event))))
 
 (defn new-event
   [{:keys [subject purpose from-key to-key from-epoch reason parents policy-cid not-before]}]
@@ -37,7 +36,7 @@
                      :from-epoch from-epoch
                      :to-epoch (inc from-epoch)
                      :reason (or reason :scheduled)
-                     :not-before (or not-before (str (Instant/now)))
+                     :not-before (or not-before #?(:clj (str (Instant/now)) :cljs (.toISOString (js/Date.))))
                      :parents (vec parents)
                      :policy-cid policy-cid}]
     (assoc e :rotation/id (event-id e))))

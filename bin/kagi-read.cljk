@@ -1,0 +1,44 @@
+;; kagi-read — JVM-free smoke test of the vault read seam (kbb, sci on Node).
+;;
+;;   cd <kagi checkout>
+;;   kbb --backend sci --classpath src bin/kagi-read.cljk <item-id> [<item-id> …]
+;;
+;; Opens the vault once (KAGI_HOME or ~/.kagi; unlock via OS keychain or
+;; KAGI_MASTER — never a prompt), reveals each named item through the same
+;; `kagi.operation` governor graph `kagi get` uses, and prints ONLY a status
+;; line per item. Plaintext never leaves this process's heap:
+;;
+;;   OK <id>        revealed (value discarded, never printed)
+;;   ABSENT <id>    no such item
+;;   DENIED <id>    the governor refused / nothing to reveal
+;;
+;; It does not list items and does not write vault.edn or identity.edn.
+;;
+;; Exit: 0 all OK · 1 some ABSENT/DENIED · 2 vault not openable here
+;; (`VAULT absent|locked` on stderr) · 64 usage.
+(ns kagi-read
+  (:require [kagi.vault-read :as vr]))
+
+(defn- exit! [code]
+  (set! (.-exitCode js/process) code))
+
+(defn run [ids]
+  (if (empty? ids)
+    (do (binding [*print-fn* *print-err-fn*]
+          (println "usage: kbb --backend sci --classpath src bin/kagi-read.cljk <item-id> [<item-id> …]"))
+        64)
+    (let [session (vr/open)]
+      (if (not= :open (:status session))
+        (do (binding [*print-fn* *print-err-fn*]
+              (println "VAULT" (name (:status session))))
+            2)
+        (let [results (vr/reveal-many session ids "kagi-read smoke (kbb)")]
+          (doseq [id ids]
+            (let [r (get results id)]
+              (println (cond (string? r) "OK"
+                             (= :absent r) "ABSENT"
+                             :else "DENIED")
+                       id)))
+          (if (every? string? (vals results)) 0 1))))))
+
+(exit! (run (vec *command-line-args*)))

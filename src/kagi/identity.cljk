@@ -6,31 +6,53 @@
 
   `.kagi/identity.edn` は公開metadataとSecretStore/native-handle参照のみを保持する。
   production署名鍵は非exportable OS/HSM handleを必須とする。"
+  ;; kbb (sci on Node) reads the `:cljs` branches, which are the READ half
+  ;; only: `load-existing-identity` (never creates), `sign-secret`,
+  ;; `sign-public`, `member-record`, `kem-public`/`kem-secret`. Generation,
+  ;; migration and native (token-backed) signing stay JVM-only.
   (:require [clojure.edn :as edn]
             [ed25519.core :as ed25519]
             [ipns.core :as ipns]
+            [kagi.b64 :as b64*]
             [kagi.crypto :as crypto]
-            [kagi.native-key :as native-key]
+            #?(:clj [kagi.native-key :as native-key])
+            #?(:cljs [kagi.crypto.noble :as noble])
+            #?(:cljs ["node:fs" :as fs])
             [kagi.key-registry :as key-registry]
             [kagi.secret-store :as secret-store])
-  (:import [java.security KeyPairGenerator KeyFactory Key MessageDigest]
-           [java.security.spec PKCS8EncodedKeySpec X509EncodedKeySpec]
-           [java.time Instant]
-           [java.time.temporal ChronoUnit]
-           [java.util Base64 UUID]))
+  #?(:clj
+     (:import [java.security KeyPairGenerator KeyFactory Key MessageDigest]
+              [java.security.spec PKCS8EncodedKeySpec X509EncodedKeySpec]
+              [java.time Instant]
+              [java.time.temporal ChronoUnit]
+              [java.util Base64 UUID])))
 
-(defn- enc ^bytes [^Key k] (.getEncoded k))
-(defn- b64 ^String [^bytes b] (.encodeToString (Base64/getEncoder) b))
-(defn- unb64 ^bytes [^String s] (.decode (Base64/getDecoder) s))
+#?(:clj (defn- enc ^bytes [^Key k] (.getEncoded k)))
+(defn- b64 ^String [^bytes b]
+  #?(:clj (.encodeToString (Base64/getEncoder) b) :cljs (b64*/encode b)))
+(defn- unb64 ^bytes [^String s]
+  #?(:clj (.decode (Base64/getDecoder) s) :cljs (b64*/decode s)))
+
+(defn- now* []
+  #?(:clj (Instant/now) :cljs (js/Date.)))
+(defn- plus-days [now n]
+  #?(:clj (.plus ^Instant now (long n) ChronoUnit/DAYS)
+     :cljs (js/Date. (+ (.getTime now) (* n 86400000)))))
+(defn- inst-str [t]
+  #?(:clj (str t) :cljs (.toISOString t)))
 (defn- b64-map [m] (into {} (map (fn [[k v]] [k (b64 v)])) m))
 (defn- unb64-map [m] (into {} (map (fn [[k v]] [k (unb64 v)])) m))
 
 (defn encode-bundle [m] (b64-map m))
 (defn decode-bundle [m] (unb64-map m))
 
-(defn- raw-pub ^bytes [pub]
-  (let [enc (.getEncoded pub)]
-    (java.util.Arrays/copyOfRange enc (- (alength enc) 32) (alength enc))))
+(defn- raw-pub
+  "JVM: a JCA PublicKey. kbb: the X.509/SPKI DER bytes themselves — unwrapped
+  with the fixed Ed25519 prefix check (fail closed on anything else)."
+  ^bytes [pub]
+  #?(:clj (let [enc (.getEncoded pub)]
+            (java.util.Arrays/copyOfRange enc (- (alength enc) 32) (alength enc)))
+     :cljs (noble/unwrap-der :ed25519-spki pub)))
 
 ;; did:key + IPNS-name derivation delegated to kotoba-lang/ed25519 and
 ;; kotoba-lang/ipns (ADR-2607050100) — this used to be a private
@@ -44,6 +66,7 @@
   [pub]
   (ipns/pubkey->name (raw-pub pub)))
 
+#?(:clj
 (defn generate-identity
   "fresh hybrid identity。Ed25519 が **authority**(did:key/IPNS graph、kotoba 不変)で、
    ML-DSA-65 を vault commit/台帳の **hybrid 共同署名** として加法的に併発行する
@@ -81,7 +104,7 @@
                                               :suite :kem-v1 :epoch 0
                                               :originator-not-after
                                               (str (.plus now 90 ChronoUnit/DAYS))}))
-                            :active (str now)))))))
+                            :active (str now))))))))
 
 (defn kem-public
   "他メンバーがこの identity へ encapsulate するための hybrid KEM 公開 bundle {:x :pq}。"
@@ -117,12 +140,21 @@
     (:kem-key id) (assoc :member/kem-key (:kem-key id))))
 
 (defn load-identity [{:keys [private-b64 public-b64] :as m}]
-  (let [kf (KeyFactory/getInstance "Ed25519")
-        pub  (.generatePublic kf (X509EncodedKeySpec. (.decode (Base64/getDecoder) public-b64)))]
-    (cond-> (merge m {:public-key pub :did (did-key pub) :graph (ipns-name pub)})
-      private-b64 (assoc :private-key
-                         (.generatePrivate kf (PKCS8EncodedKeySpec.
-                                                (.decode (Base64/getDecoder) private-b64)))))))
+  #?(:clj
+     (let [kf (KeyFactory/getInstance "Ed25519")
+           pub  (.generatePublic kf (X509EncodedKeySpec. (.decode (Base64/getDecoder) public-b64)))]
+       (cond-> (merge m {:public-key pub :did (did-key pub) :graph (ipns-name pub)})
+         private-b64 (assoc :private-key
+                            (.generatePrivate kf (PKCS8EncodedKeySpec.
+                                                   (.decode (Base64/getDecoder) private-b64))))))
+     ;; kbb: :public-key is the SPKI DER bytes and :private-key the raw 32-byte
+     ;; seed (PKCS#8 prefix checked, fail closed) — `kagi.cacao/mint` signs
+     ;; with the seed through ed25519.core.
+     :cljs
+     (let [pub (unb64 public-b64)]
+       (cond-> (merge m {:public-key pub :did (did-key pub) :graph (ipns-name pub)})
+         private-b64 (assoc :private-key
+                            (noble/unwrap-der :ed25519-pkcs8 (unb64 private-b64)))))))
 
 (def secret-fields #{:private-b64 :mldsa-private-b64 :kem-secret})
 (def public-fields #{:authority-id :public-b64 :mldsa-public-b64 :kem-public :signing-key :kem-key
@@ -131,16 +163,16 @@
                      :retired-signing-epochs})
 
 (defn- ensure-key-metadata [m]
-  (let [now (Instant/now)
+  (let [now (now*)
         custody (or (:secret-ref m) "plaintext-development://identity")
-        base {:created-at (str now) :not-before (str now) :custody-ref custody}
+        base {:created-at (inst-str now) :not-before (inst-str now) :custody-ref custody}
         signing (or (:signing-key m)
                     (key-registry/transition
                      (key-registry/key-record
                       (merge base {:id (str "sign:" (subs (:public-b64 m) 0 (min 24 (count (:public-b64 m)))))
                                    :purpose :identity-signing :suite :authority-v1 :epoch 0
-                                   :originator-not-after (str (.plus now 365 ChronoUnit/DAYS))}))
-                     :active (str now)))
+                                   :originator-not-after (inst-str (plus-days now 365))}))
+                     :active (inst-str now)))
         kem (when (:kem-public m)
               (or (:kem-key m)
                   (key-registry/transition
@@ -148,8 +180,8 @@
                     (merge base {:id (str "kem:" (subs (get-in m [:kem-public :pq])
                                                         0 (min 24 (count (get-in m [:kem-public :pq])))))
                                  :purpose :recipient-kem :suite :kem-v1 :epoch 0
-                                 :originator-not-after (str (.plus now 90 ChronoUnit/DAYS))}))
-                   :active (str now))))]
+                                 :originator-not-after (inst-str (plus-days now 90))}))
+                   :active (inst-str now))))]
     (cond-> (assoc m :signing-key signing
                      :authority-id (or (:authority-id m)
                                        (str "urn:kagi:authority:legacy:"
@@ -171,6 +203,9 @@
   ([m secret-store native-signing]
    (let [secret (secret-store/get-edn secret-store (:secret-ref m))]
      (if native-signing
+       #?(:cljs
+          (throw (ex-info "native (token-backed) identity signing is JVM-only" {}))
+          :clj
        (do
          (when (some #(contains? secret %) [:private-b64 :mldsa-private-b64])
            (throw (ex-info "native identity still contains exportable signing keys"
@@ -186,9 +221,32 @@
                            (native-key/bound-kem-recipient (:keystore native-signing) h
                                                           (kem-public id)))]
            (cond-> (assoc id :signing-handle signer)
-             recipient (assoc :decapsulation-handle recipient))))
+             recipient (assoc :decapsulation-handle recipient)))))
        (load-identity (merge m secret))))))
 
+(defn load-existing-identity
+  "READ-ONLY identity load for the vault read seam: `path` must already exist
+  and be secret-backed. Never generates (a read path that grows a new did is a
+  different person, ADR-2607170500), never writes identity.edn back (key
+  metadata missing from an old file is filled in memory only), never touches
+  native token handles.
+
+  Returns the loaded identity, or nil when `path` does not exist."
+  ([path] (load-existing-identity path nil))
+  ([path secret-store*]
+   (when-let [text #?(:clj (let [f (java.io.File. ^String path)]
+                             (when (.exists f) (slurp f)))
+                      :cljs (when (fs/existsSync path) (fs/readFileSync path "utf8")))]
+     (let [m* (ensure-key-metadata (edn/read-string text))]
+       (when-not (secret-backed-identity? m*)
+         (throw (ex-info "plaintext identity requires migration"
+                         {:path path
+                          :remediation "run kagi identity-migrate before other commands"})))
+       (load-secret-backed-identity
+        m* (or secret-store* (secret-store/store-for-ref (:secret-ref m*))))))))
+
+#?(:clj
+   (do
 (defn migrate-native-signing!
   "After token public-key binding and a live hybrid signing self-test succeed,
   remove exportable Ed25519/ML-DSA encodings from the existing SecretStore.
@@ -327,4 +385,4 @@
              (throw (ex-info "refusing to persist plaintext identity secret material"
                              {:path path
                               :remediation "configure a SecretStore or explicitly set :allow-plaintext? for disposable development only"}))))
-         id)))))
+         id)))))))

@@ -3,18 +3,21 @@
 
   The vault stores wrapped VMK envelopes. Device-local unlock secrets live in a
   SecretStore, not in vault EDN, stdout, logs, or manimani state."
-  (:require [kagi.crypto :as crypto]
-            [kagi.secret-store :as secret-store])
-  (:import [java.util Base64]))
+  ;; Portable: string → bytes goes through `crypto/utf8-bytes` (UTF-8 on both
+  ;; runtimes) and base64 through `kagi.b64`, so the kbb (sci on Node) read
+  ;; seam derives byte-identical KEKs to the JVM CLI.
+  (:require [kagi.b64 :as b64*]
+            [kagi.crypto :as crypto]
+            [kagi.secret-store :as secret-store]))
 
-(def ^:private info-os-keychain (.getBytes "kagi/unlock/os-keychain/v1" "UTF-8"))
-(def ^:private info-passkey-prf (.getBytes "kagi/unlock/passkey-prf/v1" "UTF-8"))
+(def ^:private info-os-keychain (crypto/utf8-bytes "kagi/unlock/os-keychain/v1"))
+(def ^:private info-passkey-prf (crypto/utf8-bytes "kagi/unlock/passkey-prf/v1"))
 
 (defn- passkey-info ^bytes [rp-id credential-id]
-  (.getBytes (str "kagi/unlock/passkey-prf/v1\u0000" rp-id "\u0000" credential-id) "UTF-8"))
+  (crypto/utf8-bytes (str "kagi/unlock/passkey-prf/v1\u0000" rp-id "\u0000" credential-id)))
 
 (defn- b64 [^bytes b]
-  (.encodeToString (Base64/getEncoder) b))
+  (b64*/encode b))
 
 (defn new-device-secret
   "Return a printable secret suitable for OS keychain storage."
@@ -35,20 +38,20 @@
     (merge {:method method
             :salt salt
             :nonce nonce
-            :wrapped (crypto/aead-seal p kek nonce vmk (byte-array 0))}
+            :wrapped (crypto/aead-seal p kek nonce vmk (crypto/empty-bytes))}
            fields)))
 
 (defn unwrap-vmk
   [p {:keys [method salt nonce wrapped]} secret-material]
   (let [kek (crypto/hkdf p secret-material salt (info-for method) 32)]
-    (crypto/aead-open p kek nonce wrapped (byte-array 0))))
+    (crypto/aead-open p kek nonce wrapped (crypto/empty-bytes))))
 
 (defn os-keychain-wrap
   [p vmk store ref]
   (let [secret (new-device-secret p)]
     (secret-store/put-secret! store ref secret {:content-type "text/plain"
                                                 :purpose "kagi-vmk-unlock"})
-    (wrap-vmk p vmk :os-keychain (.getBytes ^String secret "UTF-8")
+    (wrap-vmk p vmk :os-keychain (crypto/utf8-bytes secret)
               {:ref ref
                :provider :apple-keychain
                :created-by :kagi-unlock-enable})))
@@ -89,8 +92,8 @@
              (try
                (let [store (secret-store/store-for-ref ref)
                      secret (secret-store/get-secret store ref {:purpose "kagi-vmk-unlock"})]
-                 (unwrap-vmk p wrap (.getBytes ^String secret "UTF-8")))
-               (catch Exception _ nil)))
+                 (unwrap-vmk p wrap (crypto/utf8-bytes secret)))
+               (catch #?(:clj Exception :cljs :default) _ nil)))
            wraps))))
 
 (defn passkey-prf-envelope-shape []

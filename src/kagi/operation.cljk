@@ -201,7 +201,7 @@
   "VaultActor グラフを store に束ねてコンパイル。"
   [store* & [{:keys [advisor crypto checkpointer signer signer-key]
               :or {advisor      (advisor/mock-advisor)
-                   crypto       (crypto/bc-provider)
+                   crypto       #?(:clj (crypto/bc-provider) :cljs (crypto/default-provider))
                    checkpointer (cp/mem-checkpointer)}}]]
   (-> (g/state-graph
        {:channels {:request     {:default nil}
