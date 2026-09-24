@@ -9,7 +9,7 @@
   namespace, and the graph says so immediately."
   (:require [clojure.java.io :as io]
             [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is testing]]))
+            [kotoba.test :refer [deftest is testing]]))
 
 (def ^:private portable-roots
   "The slice that has to run wherever the API runs. `kagi.agent` itself is NOT

@@ -1,5 +1,5 @@
 (ns kagi.incident-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.incident :as incident]))
 

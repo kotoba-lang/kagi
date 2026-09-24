@@ -1,5 +1,5 @@
 (ns kagi.identity-store-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.secret-store :as ss]

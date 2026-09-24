@@ -1,6 +1,6 @@
 (ns kagi.ledger-test
   "改竄検知台帳: ハッシュ鎖 + hybrid 署名(Ed25519+ML-DSA-65)の検証。"
-  (:require [clojure.test :refer [deftest testing is]]
+  (:require [kotoba.test :refer [deftest testing is]]
             [kagi.ledger :as ledger]
             [kagi.identity :as identity]
             [kagi.crypto :as crypto])

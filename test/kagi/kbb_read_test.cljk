@@ -8,7 +8,7 @@
 
   kbb:  kbb --backend sci --classpath src:test -m kagi.kbb-read-test
   JVM:  kbb -M:test -n kagi.kbb-read-test"
-  (:require #?(:clj [clojure.test :refer [deftest is testing]]
+  (:require #?(:clj [kotoba.test :refer [deftest is testing]]
                :cljs [cljs.test :refer [deftest is testing run-tests] :include-macros true])
             [clojure.edn :as edn]
             [kagi.b64 :as b64]

@@ -1,5 +1,5 @@
 (ns kagi.rotation-infra-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.recovery :as recovery]
             [kagi.rotation :as rotation]

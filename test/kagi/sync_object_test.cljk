@@ -5,7 +5,7 @@
   `kagi.store/object-sealed-block-store` takes the same four, and a test that
   needed a real S3 would be testing Backblaze rather than this code."
   (:require [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest testing is]]
+            [kotoba.test :refer [deftest testing is]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.operation :as op]

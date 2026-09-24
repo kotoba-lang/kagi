@@ -7,7 +7,7 @@
   agent serve` can run somewhere the vault is not — which is the whole
   prerequisite for putting the API behind a URL."
   (:require [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is testing]]
+            [kotoba.test :refer [deftest is testing]]
             [kagi.agent :as agent]
             [kagi.agent-client :as client]
             [kagi.agent-docs :as docs]

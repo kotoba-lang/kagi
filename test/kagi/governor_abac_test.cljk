@@ -1,5 +1,5 @@
 (ns kagi.governor-abac-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kagi.governor :as governor]
             [kagi.store :as store]))
 

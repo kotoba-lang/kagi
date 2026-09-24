@@ -1,5 +1,5 @@
 (ns kagi.security-readiness-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kagi.security-readiness :as readiness]
             [kagi.crypto :as crypto]))
 

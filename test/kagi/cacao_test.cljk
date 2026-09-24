@@ -1,6 +1,6 @@
 (ns kagi.cacao-test
   "自己発行 CACAO の mint→verify 往復・改竄検知・audience 照合。"
-  (:require [kotoba.lang.text] [clojure.test :refer [deftest testing is]]
+  (:require [kotoba.lang.text] [kotoba.test :refer [deftest testing is]]
             [kagi.cacao :as cacao]
             [kagi.identity :as identity]
             [ed25519.core :as ed25519])

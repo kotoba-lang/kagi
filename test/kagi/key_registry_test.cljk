@@ -1,5 +1,5 @@
 (ns kagi.key-registry-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kagi.key-registry :as registry]))
 
 (def base

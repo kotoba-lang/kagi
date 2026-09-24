@@ -1,6 +1,6 @@
 (ns kagi.repository-context-test
   (:require [clojure.java.io :as io]
-            [clojure.test :refer [deftest is]]
+            [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.persist :as persist]
