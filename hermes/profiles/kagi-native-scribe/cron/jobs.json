@@ -1,0 +1,26 @@
+{
+  "jobs": [
+    {
+      "base_url": null,
+      "context_from": null,
+      "deliver": "local",
+      "enabled": true,
+      "enabled_toolsets": null,
+      "id": "ac704dfa3484",
+      "model": null,
+      "name": "kagi-native-tick",
+      "no_agent": false,
+      "prompt": "kagi-native-scribe measurement tick (no_agent): run scripts/kagi_native_evidence.py via python3 and relay its MEASURE lines to the ledger. If it prints REFUSED, relay that and stop — do not propose.",
+      "provider": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 10 9-21/4 * * *",
+        "display": "0 10 9-21/4 * * *"
+      },
+      "script": "kagi_native_evidence.py",
+      "skill": null,
+      "skills": [],
+      "workdir": null
+    }
+  ]
+}
