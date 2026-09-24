@@ -161,7 +161,7 @@ bin/kagi pull                         # cloud の最新 snapshot を取得（loc
 bin/kagi sync                         # pull後のremote seq一致時だけpush（競合はfail-closed）
 ```
 
-- `bin/kagi` は `kbb -M:dev:cli` のラッパ（PQC は JDK24 標準 provider を使うため bb 不可）。
+- `bin/kagi` は JVM compat 層のラッパ: JDK 24+ を探し `:dev:cli` を Clojure CLI で起動する（PQC は JDK24 標準 provider を使うため kbb/sci・bb 不可。`.cljk` は起動時の classloader hook で読む）。JDK 24+ が無ければ exit 3。
 - master passphrase は環境変数 **`KAGI_MASTER`** か端末プロンプト。`unlock-enable-keychain`
   後は device-local OS keychain unlock を先に試し、passphrase は recovery として残す。
 - 保存先は **`$KAGI_HOME`（既定 `~/.kagi`、repo 外）**（ADR-2607170500、2026-07-17）:

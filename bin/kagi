@@ -1,6 +1,80 @@
 #!/usr/bin/env bash
 # kagi — 自己主権・対量子(PQC) secrets vault CLI (op 相当)
-# PQC は JDK24 標準 provider を使うため bb ではなく clojure(full JDK)で実行する。
-# vault は実行ディレクトリの ./.kagi に置かれる。
+#
+# JVM compat layer (AGENTS.md: "JVM と bb は最後の手段 … compat 層として隔離").
+# kbb-cutover: keep  (this launcher starts the Clojure CLI on a full JDK on purpose)
+#
+# Why not `kbb -M:dev:cli`: the 2026-09-11 kbb cutover rewrote this line to kbb,
+# and kagi stopped starting (kbb/sci: 4 non-:local/root deps not on the
+# classpath, `Unable to resolve classname: java.time.Instant`; the langchain
+# dependency also has a known sci wall, see commit b73f6b2). The crypto uses the
+# JDK 24+ standard providers (javax.crypto.KEM "ML-KEM", ML-DSA) plus
+# BouncyCastle, so the CLI has to run on a JDK >= 24.
+#
+# Why the -e hook: the sources were renamed to .cljk (2026-09-11), and the JVM
+# loader only probes .class / .clj / .cljc. The hook installs a context
+# classloader that answers a missing `<ns>.cljc` resource with `<ns>.cljk`, so
+# RT.load reads it with :read-cond :allow and the :clj feature — exactly how the
+# pre-rename .cljc files were read. No source is copied or generated.
+#
+# JDK resolution (first that reports major >= 24 wins; never a silent fallback):
+#   $KAGI_JAVA_HOME, $JAVA_HOME, /usr/libexec/java_home -v 24+ (it can return an
+#   older JDK, so the version is checked), Homebrew openjdk / openjdk@2[4-9].
+# No JDK >= 24 or no `clojure` → message on stderr, exit 3 (never 0).
+#
+# vault: $KAGI_HOME, else ~/.kagi (canonical); ./.kagi is a legacy read fallback.
+set -u
 cd "$(dirname "$0")/.." || exit 1
-exec kbb -M:dev:cli "$@"
+
+java_major() {
+  # prints the major version of <home>/bin/java, or nothing
+  local v
+  v=$("$1/bin/java" -version 2>&1 | awk -F'"' '/version/ {print $2; exit}') || return 0
+  v=${v#1.}
+  printf '%s\n' "${v%%[.+-]*}"
+}
+
+pick_jdk() {
+  local c m
+  for c in "${KAGI_JAVA_HOME:-}" "${JAVA_HOME:-}" \
+           "$(/usr/libexec/java_home -v 24+ 2>/dev/null)" \
+           /opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home \
+           /opt/homebrew/opt/openjdk@2[4-9]/libexec/openjdk.jdk/Contents/Home \
+           /usr/local/opt/openjdk/libexec/openjdk.jdk/Contents/Home; do
+    [ -n "$c" ] && [ -x "$c/bin/java" ] || continue
+    m=$(java_major "$c")
+    case "$m" in ''|*[!0-9]*) continue ;; esac
+    if [ "$m" -ge 24 ]; then printf '%s\n' "$c"; return 0; fi
+  done
+  return 1
+}
+
+if ! JDK=$(pick_jdk); then
+  echo "kagi: no JDK >= 24 found (tried KAGI_JAVA_HOME, JAVA_HOME, java_home -v 24+, Homebrew openjdk)." >&2
+  echo "kagi: kagi needs the JDK 24+ ML-KEM / ML-DSA providers; install one (brew install openjdk) or set KAGI_JAVA_HOME." >&2
+  exit 3
+fi
+if ! command -v clojure >/dev/null 2>&1; then
+  echo "kagi: the Clojure CLI (clojure) is not on PATH; kagi runs on the JVM compat layer." >&2
+  exit 3
+fi
+
+export JAVA_HOME="$JDK"
+export JAVA_CMD="$JDK/bin/java"
+
+# Missing <ns>.cljc resource → <ns>.cljk (see header).
+CLJK_HOOK='(let [parent (.getContextClassLoader (Thread/currentThread))
+      cl (proxy [ClassLoader] [parent]
+           (getResource [n]
+             (or (.getResource parent n)
+                 (when (.endsWith ^String n ".cljc")
+                   (.getResource parent (str (subs n 0 (- (count n) 5)) ".cljk"))))))]
+  (.setContextClassLoader (Thread/currentThread) cl))'
+
+# :dev pins langchain to ../langchain (the west sibling); :cli carries io-storj.
+# :kagi-jvm comes last, so its main-opts (hook, then -m kagi.cli) win over :cli's.
+HOOK_EDN=${CLJK_HOOK//\\/\\\\}
+HOOK_EDN=${HOOK_EDN//\"/\\\"}
+HOOK_EDN=${HOOK_EDN//$'\n'/ }   # the CLI stores main-opts one per line
+exec clojure -Sdeps "{:aliases {:kagi-jvm {:main-opts [\"-e\" \"$HOOK_EDN\" \"-m\" \"kagi.cli\"]}}}" \
+  -M:dev:cli:kagi-jvm "$@"
