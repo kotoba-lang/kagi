@@ -1,28 +1,43 @@
 (ns kagi.persist
   "vault スナップショットの edn 永続化。byte[] は base64 にして edn 安全にする。
   保存されるのは **暗号文 + wrap 済み鍵 + 台帳メタ** のみ(平文・素の VMK は出ない)。"
+  ;; kbb (sci on Node) reads the `:cljs` branches: `<-edn` / `->edn` / `load*`
+  ;; only. `save!` is JVM-only on purpose — the kbb path is the read seam
+  ;; (kagi.vault-read) and must not be able to write vault.edn.
   (:require [clojure.walk :as walk]
-            [clojure.edn :as edn])
-  (:import [java.util Base64]
-           [java.nio ByteBuffer]
-           [java.nio.charset StandardCharsets]
-           [java.nio.file Files Paths StandardCopyOption CopyOption StandardOpenOption]
-           [java.nio.file.attribute PosixFilePermissions FileAttribute]
-           [java.nio.channels FileChannel]))
+            [clojure.edn :as edn]
+            #?(:cljs ["node:fs" :as fs]))
+  #?(:clj
+     (:import [java.util Base64]
+              [java.nio ByteBuffer]
+              [java.nio.charset StandardCharsets]
+              [java.nio.file Files Paths StandardCopyOption CopyOption StandardOpenOption]
+              [java.nio.file.attribute PosixFilePermissions FileAttribute]
+              [java.nio.channels FileChannel])))
 
-(defonce ^:private path-locks (atom {}))
+#?(:clj (defonce ^:private path-locks (atom {})))
 
-(defn- path-lock [path]
-  (let [key (str path)]
-    (or (get @path-locks key)
-        (get (swap! path-locks #(if (contains? % key) % (assoc % key (Object.)))) key))))
+#?(:clj
+   (defn- path-lock [path]
+     (let [key (str path)]
+       (or (get @path-locks key)
+           (get (swap! path-locks #(if (contains? % key) % (assoc % key (Object.)))) key)))))
 
 (defn- enc [x]
-  (if (bytes? x) {:kagi/b64 (.encodeToString (Base64/getEncoder) ^bytes x)} x))
+  #?(:clj (if (bytes? x) {:kagi/b64 (.encodeToString (Base64/getEncoder) ^bytes x)} x)
+     :cljs (if (instance? js/Uint8Array x)
+             {:kagi/b64 (.toString (js/Buffer.from (.-buffer x) (.-byteOffset x) (.-length x))
+                                   "base64")}
+             x)))
 
 (defn- dec* [x]
   (if (and (map? x) (contains? x :kagi/b64))
-    (.decode (Base64/getDecoder) ^String (:kagi/b64 x))
+    #?(:clj (.decode (Base64/getDecoder) ^String (:kagi/b64 x))
+       ;; A plain Uint8Array (not the Buffer subclass): the noble provider and
+       ;; every `instance? js/Uint8Array` check downstream see the same type the
+       ;; browser path produces.
+       :cljs (let [b (js/Buffer.from (:kagi/b64 x) "base64")]
+               (js/Uint8Array. (.-buffer b) (.-byteOffset b) (.-length b))))
     x))
 
 (defn ->edn ^String [data]
@@ -30,6 +45,7 @@
     (pr-str (walk/postwalk enc data))))
 (defn <-edn [^String s] (walk/postwalk dec* (edn/read-string s)))
 
+#?(:clj
 (defn save! [path data]
   (let [target (.toAbsolutePath (Paths/get path (make-array String 0)))
         parent (.getParent target)
@@ -72,8 +88,10 @@
             (catch Exception _))
           (finally
             (Files/deleteIfExists tmp)))))))
-  data)
+  data))
 
 (defn load* [path]
-  (let [f (java.io.File. ^String path)]
-    (when (.exists f) (<-edn (slurp f)))))
+  #?(:clj (let [f (java.io.File. ^String path)]
+            (when (.exists f) (<-edn (slurp f))))
+     :cljs (when (fs/existsSync path)
+             (<-edn (fs/readFileSync path "utf8")))))

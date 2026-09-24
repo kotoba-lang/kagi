@@ -1,0 +1,13 @@
+;; kagi.kbb-read-test fixture: the vault.edn shape `kagi.persist` writes, with
+;; made-up values (no real key material). Bytes are {:kagi/b64 …}.
+{:meta {:salt {:kagi/b64 "AID/Bw=="}
+        :unlock/wraps [{:method :os-keychain
+                        :ref "keychain://kagi-test/vmk-unlock"
+                        :provider :apple-keychain
+                        :salt {:kagi/b64 "AAECAwQFBgcICQoLDA0ODw=="}
+                        :nonce {:kagi/b64 "AAECAwQFBgcICQoLDA0ODw=="}
+                        :wrapped {:kagi/b64 "AQL/"}}]}
+ :items {"demo/one" {:item/id "demo/one"
+                     :item/compartment "personal"
+                     :item/version 3
+                     :item/nonce {:kagi/b64 ""}}}}

@@ -1,0 +1,205 @@
+(ns kagi.kbb-read-test
+  "The kbb (sci on Node) read seam — `kagi.vault-read/open` + `reveal` without a
+  JVM. The first three groups are PORTABLE: the same assertions, against the
+  same fixtures, run on both runtimes, which is what \"parity\" means here —
+  a ref that parses one way on the JVM and another on Node would unlock a
+  different keychain entry. The last group is kbb-only: an end-to-end reveal
+  through the `kagi.operation` governor graph with the noble provider.
+
+  kbb:  kbb --backend sci --classpath src:test -m kagi.kbb-read-test
+  JVM:  kbb -M:test -n kagi.kbb-read-test"
+  (:require #?(:clj [clojure.test :refer [deftest is testing]]
+               :cljs [cljs.test :refer [deftest is testing run-tests] :include-macros true])
+            [clojure.edn :as edn]
+            [kagi.b64 :as b64]
+            [kagi.persist :as persist]
+            [kagi.secret-store :as ss]
+            #?@(:cljs [[kagi.crypto :as crypto]
+                       [kagi.identity :as identity]
+                       [kagi.operation :as op]
+                       [kagi.store :as store]
+                       [kagi.vault-read :as vr]
+                       [langgraph.graph :as g]
+                       ["node:fs" :as fs]
+                       ["node:os" :as os]
+                       ["node:path" :as path]])))
+
+(defn- byte-vec
+  "Unsigned 0..255 view of the runtime's byte container."
+  [b]
+  #?(:clj (mapv #(bit-and (int %) 0xff) b)
+     :cljs (vec (array-seq b))))
+
+(defn- ->bytes [xs]
+  #?(:clj (byte-array (map unchecked-byte xs))
+     :cljs (js/Uint8Array.from (into-array xs))))
+
+(defn- slurp* [p]
+  #?(:clj (slurp p) :cljs (fs/readFileSync p "utf8")))
+
+;; ───────── base64 ─────────
+
+(deftest base64-known-vectors
+  (is (= "AID/Bw==" (b64/encode (->bytes [0 128 255 7]))))
+  (is (= [0 128 255 7] (byte-vec (b64/decode "AID/Bw=="))))
+  (is (= "" (b64/encode (->bytes []))))
+  (is (= "AID_Bw" (b64/encode-url (->bytes [0 128 255 7]))))
+  (is (= [0 128 255 7] (byte-vec (b64/decode-url "AID_Bw")))))
+
+(deftest base64-round-trip-every-byte-value
+  (let [all (range 256)]
+    (is (= (vec all) (byte-vec (b64/decode (b64/encode (->bytes all))))))
+    (is (= (vec all) (byte-vec (b64/decode-url (b64/encode-url (->bytes all))))))))
+
+;; ───────── persist <-edn / ->edn ─────────
+
+(def ^:private fixture "test/fixtures/persist-read-fixture.edn")
+
+(deftest persist-reads-fixture
+  (let [data (persist/<-edn (slurp* fixture))]
+    (testing "{:kagi/b64 …} leaves decode to the runtime byte container, at any depth"
+      (is (= [0 128 255 7] (byte-vec (get-in data [:meta :salt]))))
+      (is (= (vec (range 16)) (byte-vec (get-in data [:meta :unlock/wraps 0 :nonce]))))
+      (is (= [] (byte-vec (get-in data [:items "demo/one" :item/nonce])))))
+    (testing "everything else is left as read"
+      (is (= "keychain://kagi-test/vmk-unlock" (get-in data [:meta :unlock/wraps 0 :ref])))
+      (is (= :os-keychain (get-in data [:meta :unlock/wraps 0 :method])))
+      (is (= 3 (get-in data [:items "demo/one" :item/version]))))
+    (testing "load* reads the same file; a missing path is nil, not an error"
+      (is (= [0 128 255 7] (byte-vec (get-in (persist/load* fixture) [:meta :salt]))))
+      (is (nil? (persist/load* "test/fixtures/no-such-vault.edn"))))))
+
+(deftest persist-edn-round-trip
+  (let [s (persist/->edn {:a (->bytes [1 2 255]) :m {:b 1}})]
+    (is (= "{:a {:kagi/b64 \"AQL/\"}, :m {:b 1}}" s))
+    (is (= [1 2 255] (byte-vec (:a (persist/<-edn s)))))))
+
+;; ───────── secret refs + keychain argv ─────────
+
+(def ^:private ref-cases
+  ;; [input  expected parse-ref  expected redact-ref]
+  [["keychain://kagi/vmk-unlock"
+    {:scheme "keychain" :body "kagi/vmk-unlock" :raw "keychain://kagi/vmk-unlock"}
+    "keychain://.../vmk-unlock"]
+   ["  kagi/identity  "
+    {:scheme "keychain" :body "kagi/identity" :raw "keychain://kagi/identity"}
+    "keychain://.../identity"]
+   ["KeyChain://svc"
+    {:scheme "keychain" :body "svc" :raw "KeyChain://svc"}
+    "keychain://.../svc"]
+   ["env://KAGI_TEST_X"
+    {:scheme "env" :body "KAGI_TEST_X" :raw "env://KAGI_TEST_X"}
+    "env://.../KAGI_TEST_X"]
+   ["file:///tmp/a/b.secret"
+    {:scheme "file" :body "/tmp/a/b.secret" :raw "file:///tmp/a/b.secret"}
+    "file://.../b.secret"]])
+
+(deftest secret-ref-parsing
+  (doseq [[in parsed redacted] ref-cases]
+    (is (= parsed (ss/parse-ref in)) in)
+    (is (= redacted (ss/redact-ref in)) in))
+  (is (nil? (ss/parse-ref "   ")))
+  (is (nil? (ss/parse-ref nil))))
+
+(deftest keychain-get-argv-and-output
+  (let [calls (atom [])
+        fake (fn [& argv] (swap! calls conj (vec argv)) {:exit 0 :out "s3cr3t\n" :err ""})
+        st (ss/apple-keychain-store fake)]
+    (is (= "s3cr3t" (ss/get-secret st "keychain://svc-a/acct-b" {})))
+    (is (= "s3cr3t" (ss/get-secret st "svc-only" {})))
+    (is (= [["security" "find-generic-password" "-s" "svc-a" "-a" "acct-b" "-w"]
+            ["security" "find-generic-password" "-s" "svc-only" "-a" "default" "-w"]]
+           @calls)))
+  (testing "a non-zero exit is an error carrying the reason, not an empty secret"
+    (let [st (ss/apple-keychain-store (fn [& _] {:exit 44 :out "" :err "not found\n"}))
+          e (try (ss/get-secret st "keychain://svc/acct" {}) nil
+                 (catch #?(:clj Exception :cljs :default) e e))]
+      (is (some? e))
+      (is (= 44 (:exit (ex-data e))))
+      (is (= "not found" (:err (ex-data e))))))
+  (testing "a non-keychain ref is refused by the keychain store"
+    (is (thrown? #?(:clj Exception :cljs :default)
+                 (ss/get-secret (ss/apple-keychain-store (fn [& _] {:exit 0 :out "x"}))
+                                "env://X" {})))))
+
+;; ───────── kbb-only: end to end through the governor graph ─────────
+
+#?(:cljs
+   (do
+     (defn- tmp-dir []
+       (fs/mkdtempSync (path/join (os/tmpdir) "kagi-kbb-read-")))
+
+     (defn- noble-identity!
+       "A secret-backed identity as `kagi init` leaves it: public fields +
+       :secret-ref in identity.edn, private halves in a SecretStore."
+       [dir p]
+       (let [{:keys [public secret]} (crypto/sign-keypair p)
+             ref "keychain://kagi-test/identity"
+             sec {:private-b64 (b64/encode (:ed secret))
+                  :mldsa-private-b64 (b64/encode (:mldsa secret))}
+             pub {:public-b64 (b64/encode (:ed public))
+                  :mldsa-public-b64 (b64/encode (:mldsa public))
+                  :secret-ref ref}
+             sstore (ss/mem-secret-store)
+             id-path (str dir "/identity.edn")]
+         (ss/put-edn! sstore ref sec)
+         (fs/writeFileSync id-path (pr-str pub))
+         {:id-path id-path :sstore sstore}))
+
+     (defn- seed-item! [st p id vmk item-id plaintext]
+       (g/run* (op/build st {:crypto p})
+               {:request {:op :item/create :item-id item-id :compartment "personal"
+                          :plaintext (crypto/utf8-bytes plaintext)}
+                :context {:did (:did id) :role :owner :phase 1 :vmk vmk
+                          :purpose :daily-use}}
+               {:thread-id (str "seed-" item-id)}))
+
+     (deftest load-existing-identity-reads-and-never-creates
+       (let [dir (tmp-dir)
+             p (crypto/default-provider)
+             {:keys [id-path sstore]} (noble-identity! dir p)
+             before (fs/readFileSync id-path "utf8")
+             id (identity/load-existing-identity id-path sstore)]
+         (is (re-matches #"did:key:z6Mk.+" (:did id)))
+         (is (= 32 (.-length (:private-key id))) "raw Ed25519 seed")
+         (is (= before (fs/readFileSync id-path "utf8")) "identity.edn not rewritten")
+         (testing "a missing identity is nil and nothing is created"
+           (let [missing (str dir "/nope/identity.edn")]
+             (is (nil? (identity/load-existing-identity missing sstore)))
+             (is (false? (fs/existsSync missing)))))))
+
+     (deftest reveal-many-through-the-governor
+       (let [dir (tmp-dir)
+             p (crypto/default-provider)
+             {:keys [id-path sstore]} (noble-identity! dir p)
+             id (identity/load-existing-identity id-path sstore)
+             vmk (crypto/rand-bytes p 32)
+             st (store/mem-store {:members {(:did id) #:member{:did (:did id) :role :owner}}})
+             _ (seed-item! st p id vmk "svc/api-key" "sk-テスト-123")
+             session {:status :open :provider p :identity id :did (:did id)
+                      :vmk vmk :store st :vault-home dir}
+             ledger-before (count (store/ledger st))
+             r (vr/reveal-many session ["svc/api-key" "svc/none"] "kbb-read-test")]
+         (is (= {"svc/api-key" "sk-テスト-123" "svc/none" :absent} r))
+         (is (= (inc ledger-before) (count (store/ledger st)))
+             "exactly one governed reveal was committed to the ledger")
+         (is (= [:committed :item/reveal] ((juxt :t :op) (last (store/ledger st))))
+             "the ledger entry is the reveal")
+         (is (nil? (vr/reveal-many {:status :locked} ["svc/api-key"] "x"))
+             "a session that is not open answers nothing")
+         (testing "a CACAO whose issuer is not the signing key is held by authn → :denied"
+           (let [o (noble-identity! (tmp-dir) p)
+                 other (identity/load-existing-identity (:id-path o) (:sstore o))
+                 forged (assoc session :identity (assoc id :did (:did other)))]
+             (is (= {"svc/api-key" :denied}
+                    (vr/reveal-many forged ["svc/api-key"] "kbb-read-test")))
+             (is (= :policy-hold (:t (last (store/ledger st))))
+                 "the refusal is on the ledger as a hold, not silently dropped")))))
+
+     (defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
+       (when-not (cljs.test/successful? m)
+         (set! (.-exitCode js/process) 1)))
+
+     (defn -main [& _]
+       ;; ns を明示する —— 省略すると `user` を走らせて 0 tests で緑になる。
+       (run-tests 'kagi.kbb-read-test))))

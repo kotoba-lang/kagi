@@ -6,14 +6,25 @@
 
   SIWE/wire ビルダは `kotoba.cacao` の byte-exact 純関数の写し(同期して保つ)。crypto は
   JDK Ed25519 + 最小 CBOR(definite-length)。"
+  ;; kbb (sci on Node) reads the `:cljs` branches: bytes are Uint8Array, the
+  ;; CBOR writer appends to a JS array, Ed25519 goes through `ed25519.core`
+  ;; (node:crypto) with the raw 32-byte seed / pubkey, and time is `js/Date`.
+  ;; `mint` / `verify` produce and accept the same wire bytes on both runtimes.
   (:require [cacao.core :as shared]
+            [kagi.b64 :as b64]
+            [kagi.digest :as digest]
             [kotoba.lang.text :as str]
             [ed25519.core :as ed25519])
-  (:import [java.security Signature MessageDigest]
-           [java.io ByteArrayOutputStream]
-           [java.lang StringBuilder]
-           [java.util Base64]
-           [java.time Instant]))
+  #?(:clj
+     (:import [java.security Signature MessageDigest]
+              [java.io ByteArrayOutputStream]
+              [java.lang StringBuilder]
+              [java.util Base64]
+              [java.time Instant])))
+
+(defn- utf8 [s]
+  #?(:clj (.getBytes ^String s "UTF-8")
+     :cljs (.encode (js/TextEncoder.) s)))
 
 ;; ───────── canonical graph CID (mirror of kotobase.cid, via tsumugu port) ─────────
 ;; The kotobase.net edge does NOT address a tenant by its raw IPNS name — it
@@ -24,8 +35,30 @@
 (def ^:private b32 "abcdefghijklmnopqrstuvwxyz234567")
 
 (defn- sha256 ^bytes [^bytes data]
-  (.digest (MessageDigest/getInstance "SHA-256") data))
+  #?(:clj (.digest (MessageDigest/getInstance "SHA-256") data)
+     :cljs (digest/sha256-bytes data)))
 
+#?(:cljs
+   (defn- base32-lower-no-pad
+     "Same alphabet/bit order as the JVM branch. `value` is masked to the bits
+     still pending — JS bitwise operators are 32-bit, so the JVM's unbounded
+     long accumulator would overflow here."
+     [data]
+     (loop [i 0 bits 0 value 0 out []]
+       (if (< i (.-length data))
+         (let [value (bit-and (bit-or (bit-shift-left value 8) (aget data i)) 0xfff)
+               [bits value out]
+               (loop [bits (+ bits 8) out out]
+                 (if (>= bits 5)
+                   (recur (- bits 5)
+                          (conj out (.charAt b32 (bit-and (unsigned-bit-shift-right value (- bits 5)) 31))))
+                   [bits value out]))]
+           (recur (inc i) bits value out))
+         (apply str (cond-> out
+                      (pos? bits)
+                      (conj (.charAt b32 (bit-and (bit-shift-left value (- 5 bits)) 31)))))))))
+
+#?(:clj
 (defn- base32-lower-no-pad
   "CIDv1 base32-lower, no padding. Ported from kotobase.cid (via tsumugu.cacao)."
   [^bytes data]
@@ -45,16 +78,18 @@
          data)]
     (when (pos? bits)
       (.append sb (.charAt b32 (bit-and (bit-shift-left value (- 5 bits)) 31))))
-    (.toString sb)))
+    (.toString sb))))
 
 (defn graph-cid-from-name
   "SHA-256(name) behind a CIDv1/dag-cbor/sha2-256 header (0x01 0x71 0x12 0x20),
   base32-lower 'b'. Ported from kotobase.cid/graph-cid-from-name."
   [^String name]
-  (let [hash (sha256 (.getBytes name "UTF-8"))
-        cid  (byte-array (concat [(unchecked-byte 0x01) (unchecked-byte 0x71)
-                                  (unchecked-byte 0x12) (unchecked-byte 0x20)]
-                                 (seq hash)))]
+  (let [hash (sha256 (utf8 name))
+        cid  #?(:clj (byte-array (concat [(unchecked-byte 0x01) (unchecked-byte 0x71)
+                                          (unchecked-byte 0x12) (unchecked-byte 0x20)]
+                                         (seq hash)))
+                :cljs (js/Uint8Array.from (into-array (concat [0x01 0x71 0x12 0x20]
+                                                              (array-seq hash)))))]
     (str "b" (base32-lower-no-pad cid))))
 
 (defn canonical-graph
@@ -107,12 +142,22 @@
 
 ;; ───────── minimal CBOR encode (definite-length) ─────────
 
-(defn- cbor-head [^ByteArrayOutputStream o major n]
-  (cond (< n 24)    (.write o (int (+ (bit-shift-left major 5) n)))
-        (< n 256)   (do (.write o (int (+ (bit-shift-left major 5) 24))) (.write o (int n)))
-        (< n 65536) (do (.write o (int (+ (bit-shift-left major 5) 25)))
-                        (.write o (int (bit-and (unsigned-bit-shift-right n 8) 0xff)))
-                        (.write o (int (bit-and n 0xff))))
+(defn- out-byte! [o n]
+  #?(:clj (.write ^ByteArrayOutputStream o (int n))
+     :cljs (.push o n)))
+
+(defn- out-bytes! [o b]
+  #?(:clj (.write ^ByteArrayOutputStream o ^bytes b 0 (alength ^bytes b))
+     :cljs (dotimes [i (.-length b)] (.push o (aget b i)))))
+
+(defn- blen [b] #?(:clj (alength ^bytes b) :cljs (.-length b)))
+
+(defn- cbor-head [o major n]
+  (cond (< n 24)    (out-byte! o (+ (bit-shift-left major 5) n))
+        (< n 256)   (do (out-byte! o (+ (bit-shift-left major 5) 24)) (out-byte! o n))
+        (< n 65536) (do (out-byte! o (+ (bit-shift-left major 5) 25))
+                        (out-byte! o (bit-and (unsigned-bit-shift-right n 8) 0xff))
+                        (out-byte! o (bit-and n 0xff)))
         :else (throw (ex-info "cbor len too big" {:n n}))))
 
 ;; dag-cbor canonical map-key order: by UTF-8 byte length ascending, then
@@ -121,13 +166,15 @@
 ;; edge even though it never affects the SIWE signature (that's over the message
 ;; string, not the CBOR envelope).
 (defn- dag-cbor-key-order [ks]
-  (sort-by (fn [k] (let [b (.getBytes ^String (name k) "UTF-8")]
-                     [(alength b) (vec b)]))
+  (sort-by (fn [k] (let [b (utf8 (name k))]
+                     ;; JVM compares signed bytes, JS unsigned; every key here is
+                     ;; ASCII (< 0x80), where the two orders coincide.
+                     [(blen b) #?(:clj (vec b) :cljs (vec (array-seq b)))]))
            ks))
 
-(defn- cbor-val [^ByteArrayOutputStream o v]
+(defn- cbor-val [o v]
   (cond
-    (string? v)     (let [b (.getBytes ^String v "UTF-8")] (cbor-head o 3 (alength b)) (.write o b 0 (alength b)))
+    (string? v)     (let [b (utf8 v)] (cbor-head o 3 (blen b)) (out-bytes! o b))
     (map? v)        (do (cbor-head o 5 (count v))
                         (doseq [k (dag-cbor-key-order (keys v))]
                           (cbor-val o (name k)) (cbor-val o (get v k))))
@@ -135,11 +182,12 @@
     :else           (cbor-val o (str v))))
 
 (defn- cbor-bytes ^bytes [v]
-  (let [o (ByteArrayOutputStream.)] (cbor-val o v) (.toByteArray o)))
+  #?(:clj (let [o (ByteArrayOutputStream.)] (cbor-val o v) (.toByteArray o))
+     :cljs (let [o #js []] (cbor-val o v) (js/Uint8Array.from o))))
 
 ;; ───────── minimal CBOR decode (text/array/map; verify 用) ─────────
 
-(defn- ub [^bytes b i] (bit-and (int (aget b i)) 0xff))
+(defn- ub [^bytes b i] #?(:clj (bit-and (int (aget b i)) 0xff) :cljs (aget b i)))
 
 (defn- cbor-read
   "[value next-pos] を返す。text(3)/array(4)/map(5)、追加情報 0-23/24/25 のみ対応。"
@@ -150,7 +198,9 @@
                      (= info 25) [(bit-or (bit-shift-left (ub b (inc pos)) 8) (ub b (+ pos 2))) (+ pos 3)]
                      :else (throw (ex-info "cbor: unsupported head" {:info info})))]
     (case (int major)
-      3 [(String. (java.util.Arrays/copyOfRange b p1 (+ p1 n)) "UTF-8") (+ p1 n)]
+      3 [#?(:clj (String. (java.util.Arrays/copyOfRange b p1 (+ p1 n)) "UTF-8")
+            :cljs (.decode (js/TextDecoder. "utf-8") (.subarray b p1 (+ p1 n))))
+         (+ p1 n)]
       4 (loop [i 0 p p1 acc []]
           (if (< i n) (let [[v np] (cbor-read b p)] (recur (inc i) np (conj acc v))) [acc p]))
       5 (loop [i 0 p p1 acc {}]
@@ -167,15 +217,25 @@
   0xED01 verification + exact-length check), replacing this repo's own former
   copy-pasted decoder that never checked the multicodec byte-type."
   [iss]
-  (ed25519/public-from-raw (ed25519/did-key->pubkey iss)))
+  ;; :cljs keeps the raw 32 bytes — `ed-verify?` there takes the raw key.
+  #?(:clj (ed25519/public-from-raw (ed25519/did-key->pubkey iss))
+     :cljs (ed25519/did-key->pubkey iss)))
 
 ;; ───────── Ed25519 ─────────
 
+(declare seed-bytes)
+
 (defn- ed-sign ^bytes [priv ^bytes msg]
-  (let [s (doto (Signature/getInstance "Ed25519") (.initSign priv))] (.update s msg) (.sign s)))
+  #?(:clj (let [s (doto (Signature/getInstance "Ed25519") (.initSign priv))] (.update s msg) (.sign s))
+     ;; :cljs identities carry the raw seed (kagi.identity/load-identity).
+     ;; ed25519.core hands back a signed view (measured: Int8Array under
+     ;; kbb); re-view the same bytes unsigned so base64 sees 0..255.
+     :cljs (let [sig (ed25519/sign (seed-bytes priv) msg)]
+             (js/Uint8Array. (.-buffer sig) (.-byteOffset sig) (.-length sig)))))
 
 (defn- ed-verify? [pub ^bytes msg ^bytes sig]
-  (let [v (doto (Signature/getInstance "Ed25519") (.initVerify pub))] (.update v msg) (.verify v sig)))
+  #?(:clj (let [v (doto (Signature/getInstance "Ed25519") (.initVerify pub))] (.update v msg) (.verify v sig))
+     :cljs (boolean (ed25519/verify pub msg sig))))
 
 (defn- seed-bytes
   "The raw 32-byte Ed25519 seed, from either representation callers hold.
@@ -185,11 +245,16 @@
   the issuer DID from the seed itself, so it needs the raw bytes. Anything
   already 32 bytes is passed through."
   ^bytes [priv]
-  (cond
-    (bytes? priv) (if (= 32 (alength ^bytes priv))
-                    priv
-                    (byte-array (take-last 32 (seq priv))))
-    :else (byte-array (take-last 32 (seq (.getEncoded ^java.security.PrivateKey priv))))))
+  #?(:clj
+     (cond
+       (bytes? priv) (if (= 32 (alength ^bytes priv))
+                       priv
+                       (byte-array (take-last 32 (seq priv))))
+       :else (byte-array (take-last 32 (seq (.getEncoded ^java.security.PrivateKey priv)))))
+     :cljs
+     (if (= 32 (.-length priv))
+       priv
+       (.slice priv (- (.-length priv) 32)))))
 
 ;; ───────── mint / verify ─────────
 
@@ -200,9 +265,9 @@
   (let [payload (grant->payload grant {:iss did :aud aud :nonce nonce
                                        :issued-at issued-at :expiry expiry})
         msg     (siwe-message payload)
-        sig     (ed-sign private-key (.getBytes ^String msg "UTF-8"))
-        sig-b64 (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) sig)]
-    (.encodeToString (Base64/getEncoder) (cbor-bytes (->wire payload sig-b64)))))
+        sig     (ed-sign private-key (utf8 msg))
+        sig-b64 (b64/encode-url sig)]
+    (b64/encode (cbor-bytes (->wire payload sig-b64)))))
 
 ;; ── kotobase.net apex CACAO ─────────────────────────────────────────────────
 ;; The rules live in `cacao.core` (org-chainagnostic-cacao), NOT here. The
@@ -282,7 +347,7 @@
   Verification is `verify`; this deliberately does not do it, so a test can
   assert what a REJECTED token looked like."
   [cacao-b64]
-  (let [wire (first (cbor-read (.decode (Base64/getDecoder) ^String cacao-b64) 0))
+  (let [wire (first (cbor-read (b64/decode cacao-b64) 0))
         p    (get wire "p")]
     {:header-type (get-in wire ["h" "t"])
      :signature   (get-in wire ["s" "s"])
@@ -300,23 +365,31 @@
   ([cacao-b64] (verify cacao-b64 nil))
   ([cacao-b64 {:keys [aud now nonce-seen?]}]
    (try
-     (let [wire (first (cbor-read (.decode (Base64/getDecoder) ^String cacao-b64) 0))
+     (let [wire (first (cbor-read (b64/decode cacao-b64) 0))
            p    (get wire "p")
-           sigb (.decode (Base64/getUrlDecoder) ^String (get-in wire ["s" "s"]))
+           sigb (b64/decode-url (get-in wire ["s" "s"]))
            payload {:iss (get p "iss") :aud (get p "aud") :issued-at (get p "iat")
                     :expiry (get p "exp") :nonce (get p "nonce") :domain (get p "domain")
                     :statement (get p "statement") :version (get p "version")
                     :resources (get p "resources")}
            msg  (siwe-message payload)
            pub  (did-key->public (:iss payload))
-           sig-ok? (ed-verify? pub (.getBytes ^String msg "UTF-8") sigb)
+           sig-ok? (ed-verify? pub (utf8 msg) sigb)
            aud-ok? (or (nil? aud) (= aud (:aud payload)))
            exp-ok? (if-let [exp (:expiry payload)]
-                     (let [now* (if now (Instant/parse now) (Instant/now))]
-                       (not (.isAfter now* (Instant/parse exp))))
+                     #?(:clj (let [now* (if now (Instant/parse now) (Instant/now))]
+                               (not (.isAfter now* (Instant/parse exp))))
+                        :cljs (let [now* (if now (js/Date.parse now) (js/Date.now))
+                                    exp* (js/Date.parse exp)]
+                                ;; an unparseable expiry is NaN, and NaN compares
+                                ;; false — fail closed rather than read it as "not
+                                ;; expired".
+                                (and (not (js/isNaN exp*)) (not (js/isNaN now*))
+                                     (<= now* exp*))))
                      true)
            replay? (boolean (and nonce-seen? (nonce-seen? (:nonce payload))))]
        {:ok? (boolean (and sig-ok? aud-ok? exp-ok? (not replay?)))
         :iss (:iss payload) :aud (:aud payload) :resources (:resources payload)
         :expired? (not exp-ok?) :replay? replay?})
-     (catch Exception e {:ok? false :error (.getMessage e)}))))
+     (catch #?(:clj Exception :cljs :default) e
+       {:ok? false :error #?(:clj (.getMessage e) :cljs (.-message e))}))))
