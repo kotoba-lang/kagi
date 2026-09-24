@@ -1185,9 +1185,11 @@ KAGI_IDENTITY_STORE=keychain で新規 identity 秘密鍵を Apple Keychain に�
           (#{"help" "-h" "--help"} (first args))
           (some #{"-h" "--help"} args))
     (help)
-    (let [p  (if (resolve 'crypto/default-provider)
-               (crypto/default-provider)
-               (crypto/jvm-provider))
+    ;; A reader conditional, not `(if (resolve ...))`: the JVM compiler
+    ;; rejects the unresolvable `crypto/default-provider` symbol at compile
+    ;; time even inside a branch that never runs.
+    (let [p  #?(:clj (crypto/jvm-provider)
+                :cljs (crypto/default-provider))
           cmd (first args)
           ;; `identity-migrate` must be able to READ the very plaintext
           ;; identity it exists to move into a SecretStore.

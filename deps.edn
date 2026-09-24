@@ -93,7 +93,7 @@
          {:local/root "../langchain"}}}
   ;; kbb -M:dev:run  → drive the demo ops through one VaultActor
   :run {:main-opts ["-m" "kagi.sim"]}
-  ;; kbb -M:dev:cli <cmd>  → op 相当の CLI(vault は ./.kagi)。bin/kagi も参照。
+  ;; bin/kagi <cmd>  → op 相当の CLI(vault は ~/.kagi)。JDK 24+ の JVM compat 層で :dev:cli を起動する(bin/kagi 参照)。
   ;; `kagi push --backend object` wires an S3-compatible object store, so the
   ;; CLI — the application doing the wiring — carries io-storj. The LIBRARY
   ;; still does not: `kagi.store` / `kagi.sync` take four functions and never

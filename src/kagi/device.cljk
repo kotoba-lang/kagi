@@ -172,13 +172,14 @@
         issued-at #?(:clj (.truncatedTo (Instant/now) ChronoUnit/SECONDS)
                      :cljs (-> (js/Date.) (.toISOString) (subs 0 19) (str "Z")))
         issued-str (str issued-at)
-        expires-str (str (if (string? issued-at)
-                           (-> (js/Date. (.getTime (js/Date. issued-at))
-                                         (* 1000 (or ttl-sec default-ttl-sec)))
-                               (.toISOString)
-                               (subs 0 19)
-                               (str "Z"))
-                           (.plusSeconds issued-at (or ttl-sec default-ttl-sec))))]
+        ;; Each engine's branch is behind its own reader conditional: an
+        ;; unguarded `js/Date.` does not compile on the JVM (bin/kagi).
+        expires-str (str #?(:clj (.plusSeconds issued-at (or ttl-sec default-ttl-sec))
+                            :cljs (-> (js/Date. (+ (.getTime (js/Date. issued-at))
+                                                   (* 1000 (or ttl-sec default-ttl-sec))))
+                                      (.toISOString)
+                                      (subs 0 19)
+                                      (str "Z"))))]
     {:grant/device-id (:device/id request)
      :grant/label (:device/label request)
      :grant/kem-ct (b64-map (:kem-ct envelope))
