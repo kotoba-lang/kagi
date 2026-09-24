@@ -1,7 +1,7 @@
 (ns kagi.device-test
   "Device enrollment: a second machine gets the vault without the master
   passphrase ever being copied to it."
-  (:require [kotoba.lang.text] [clojure.test :refer [deftest testing is]]
+  (:require [kotoba.lang.text] [kotoba.test :refer [deftest testing is]]
             [kagi.crypto :as crypto]
             [kagi.device :as device]
             [kagi.secret-store :as secret-store]

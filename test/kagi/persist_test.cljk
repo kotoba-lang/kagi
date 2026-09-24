@@ -1,5 +1,5 @@
 (ns kagi.persist-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kagi.persist :as persist])
   (:import [java.nio.file Files]
            [java.nio.file.attribute PosixFilePermissions]))

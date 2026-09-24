@@ -1,5 +1,5 @@
 (ns kagi.native-key-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kagi.native-key :as native-key])
   (:import [java.security KeyStore]))
 

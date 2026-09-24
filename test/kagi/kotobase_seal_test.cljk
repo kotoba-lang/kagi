@@ -1,5 +1,5 @@
 (ns kagi.kotobase-seal-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.kotobase-seal :as seal]))
 

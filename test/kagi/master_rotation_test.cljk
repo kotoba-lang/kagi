@@ -1,5 +1,5 @@
 (ns kagi.master-rotation-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.master-rotation :as master]

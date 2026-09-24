@@ -1,5 +1,5 @@
 (ns kagi.recovery-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.recovery :as recovery]))
 

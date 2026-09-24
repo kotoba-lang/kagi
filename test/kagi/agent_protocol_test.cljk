@@ -3,7 +3,7 @@
   is the portable digest, so these assertions mean the same thing on whichever
   runtime runs them."
   (:require [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest testing is]]
+            [kotoba.test :refer [deftest testing is]]
             [kagi.agent-client :as client]
             [kagi.agent-protocol :as proto]))
 

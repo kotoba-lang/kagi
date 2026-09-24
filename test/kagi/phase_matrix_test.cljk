@@ -1,5 +1,5 @@
 (ns kagi.phase-matrix-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kagi.phase :as phase]))
 
 (def phases [-1 0 1 2 3 4])

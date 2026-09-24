@@ -16,7 +16,7 @@
   genuinely exists still never reaches the page."
   (:require [kotoba.lang.text :as str]
             [kagitaba.item :as kitem]
-            [clojure.test :refer [deftest is testing]]
+            [kotoba.test :refer [deftest is testing]]
             [kagi.clipboard :as clipboard]
             [kagi.crypto :as crypto]
             [kagi.device :as device]

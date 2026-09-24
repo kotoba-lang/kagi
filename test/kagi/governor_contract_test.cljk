@@ -1,6 +1,6 @@
 (ns kagi.governor-contract-test
   "単一不変条件のテスト: Governor が拒否する op は副作用ゼロ + 台帳に 1 hold fact。"
-  (:require [clojure.test :refer [deftest testing is]]
+  (:require [kotoba.test :refer [deftest testing is]]
             [langgraph.graph :as g]
             [kagi.operation :as op]
             [kagi.store :as store]

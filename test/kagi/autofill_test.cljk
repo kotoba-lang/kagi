@@ -1,7 +1,7 @@
 (ns kagi.autofill-test
   "Tests for the parts of the autofill path that do not need a browser —
   chosen because one of them is where the real bug was."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kagi.autofill :as af]))
 
 ;; --------------------------------------------------------------- reassembly

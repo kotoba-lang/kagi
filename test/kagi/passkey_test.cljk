@@ -1,5 +1,5 @@
 (ns kagi.passkey-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.passkey :as passkey]
             [kagi.unlock :as unlock])

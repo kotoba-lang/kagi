@@ -2,7 +2,7 @@
   "The renderer, against the two things it must never get wrong: showing a
   secret, and shipping a view nobody can reach."
   (:require [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is testing]]
+            [kotoba.test :refer [deftest is testing]]
             [kagi.ui :as ui]))
 
 (def ^:private plaintext "correct-horse-battery-staple")

@@ -1,5 +1,5 @@
 (ns kagi.clipboard-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kagi.clipboard :as clipboard]))
 
 ;; Two sessions found this flake independently on 2026-07-30 and fixed it two

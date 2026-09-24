@@ -1,7 +1,7 @@
 (ns kagi.store-contract-test
   "Store contract。MemStore で検証し、同じ deftest を KotobaStore(:db-api 配線後)へ
   再利用する(MemStore ≡ KotobaStore)。"
-  (:require [clojure.test :refer [deftest testing is]]
+  (:require [kotoba.test :refer [deftest testing is]]
             [kagi.store :as store]
             [kagi.ledger :as ledger]
             [kagi.crypto :as crypto]))

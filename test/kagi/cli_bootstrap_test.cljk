@@ -4,7 +4,7 @@
   The first bricked a live vault outright: every command, including the one
   the error message named as the remedy, exited non-zero."
   (:require [clojure.edn]
-            [clojure.test :refer [deftest is testing]]
+            [kotoba.test :refer [deftest is testing]]
             [kagi.cli :as cli]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]

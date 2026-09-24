@@ -6,7 +6,7 @@
   S3 の応答形が実際に噛み合うことを見る —— アダプタだけを fake で試すと、
   『0-255 の vector を返す』という io-storj 側の契約と kagi の `byte[]` の食い違いが
   復号時まで露見しない。"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.store :as store]))
 

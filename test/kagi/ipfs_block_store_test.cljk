@@ -4,7 +4,7 @@
   偽 IPFS は本物と同じ性質だけを持つ: **バイト列を渡すと内容から決まるアドレスを
   返し、同じバイト列は必ず同じアドレスになる**。この 1 点が object store 版との
   違いを生むので、そこを fake で再現しないとテストが別物になる。"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.store :as store])
   (:import [java.security MessageDigest]))
