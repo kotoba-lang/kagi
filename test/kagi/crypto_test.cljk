@@ -1,9 +1,9 @@
 (ns kagi.crypto-test
   "AES-256-GCM/HKDFの標準KAT、hybrid ML-KEM/ML-DSA、Argon2id、item/DEKの
   roundtrip・negative・downgrade境界テスト。"
-  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest testing is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest testing is]]
             [kotoba.lang.edn :as edn]
-            [clojure.java.io :as io]
+            [kotoba.io :as io]
             [kagi.crypto :as crypto])
   (:import [java.util HexFormat Arrays]
            [java.security KeyFactory Signature]
@@ -62,9 +62,9 @@
         ikm (byte-array 32)
         out (crypto/hkdf p ikm (byte-array 0) (byte-array 0) 4097)]
     (is (= 4097 (count out)) "counter values above 127 use unsigned octets")
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (crypto/hkdf p ikm (byte-array 0) (byte-array 0) 0)))
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (crypto/hkdf p ikm (byte-array 0) (byte-array 0) 8161)))))
 
 (deftest aes-256-gcm-nist-known-answer-and-policy-boundary
@@ -75,10 +75,10 @@
         ciphertext (crypto/aead-seal p key nonce plaintext (byte-array 0))]
     (is (= "cea7403d4d606b6e074ec5d3baf39d18d0d1c8a799996bf0265b98b5d48ab919"
            (hex ciphertext)))
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (crypto/aead-seal p (byte-array 16) nonce plaintext (byte-array 0)))
         "AES-128 downgrade is rejected")
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (crypto/aead-seal p key (byte-array 16) plaintext (byte-array 0)))
         "non-96-bit GCM nonce is rejected")))
 

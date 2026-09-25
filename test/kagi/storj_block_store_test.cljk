@@ -9,7 +9,7 @@
 
   同じ経路が **Backblaze B2** にもそのまま使える —— B2 は S3 互換面を出すので、
   違うのは `storj.gateway` に渡す endpoint だけ。"
-  (:require [kotoba.http.form-urlencoded :as form-urlencoded] [kotoba.lang.text :as str]
+  (:require [kotoba.lang.error :as kerror] [kotoba.http.form-urlencoded :as form-urlencoded] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.store :as store]
@@ -99,6 +99,6 @@
     (reset! requests [])
     (testing "違うバイト列での上書きは、S3 に届く前に落ちる"
       (is (thrown-with-msg?
-           clojure.lang.ExceptionInfo #"already holds different ciphertext"
+           kerror/ExceptionInfo #"already holds different ciphertext"
            (store/sealed-put! sealed "cid:secret-1:v1" (byte-array [9 9 9]))))
       (is (not-any? #(= :put (:method %)) @requests)))))

@@ -10,7 +10,7 @@
   ;; only: `load-existing-identity` (never creates), `sign-secret`,
   ;; `sign-public`, `member-record`, `kem-public`/`kem-secret`. Generation,
   ;; migration and native (token-backed) signing stay JVM-only.
-  (:require [kotoba.lang.edn :as edn]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.lang.edn :as edn]
             [ed25519.core :as ed25519]
             [ipns.core :as ipns]
             [kagi.b64 :as b64*]
@@ -25,13 +25,13 @@
               [java.security.spec PKCS8EncodedKeySpec X509EncodedKeySpec]
               [java.time Instant]
               [java.time.temporal ChronoUnit]
-              [java.util Base64 UUID])))
+              [java.util UUID])))
 
 #?(:clj (defn- enc ^bytes [^Key k] (.getEncoded k)))
 (defn- b64 ^String [^bytes b]
-  #?(:clj (.encodeToString (Base64/getEncoder) b) :cljs (b64*/encode b)))
+  #?(:clj (kbytes/base64-encode b) :cljs (b64*/encode b)))
 (defn- unb64 ^bytes [^String s]
-  #?(:clj (.decode (Base64/getDecoder) s) :cljs (b64*/decode s)))
+  #?(:clj (kbytes/base64-decode-bytes s) :cljs (b64*/decode s)))
 
 (defn- now* []
   #?(:clj (Instant/now) :cljs (js/Date.)))
@@ -142,11 +142,11 @@
 (defn load-identity [{:keys [private-b64 public-b64] :as m}]
   #?(:clj
      (let [kf (KeyFactory/getInstance "Ed25519")
-           pub  (.generatePublic kf (X509EncodedKeySpec. (.decode (Base64/getDecoder) public-b64)))]
+           pub  (.generatePublic kf (X509EncodedKeySpec. (kbytes/base64-decode-bytes public-b64)))]
        (cond-> (merge m {:public-key pub :did (did-key pub) :graph (ipns-name pub)})
          private-b64 (assoc :private-key
                             (.generatePrivate kf (PKCS8EncodedKeySpec.
-                                                   (.decode (Base64/getDecoder) private-b64))))))
+                                                   (kbytes/base64-decode-bytes private-b64))))))
      ;; kbb: :public-key is the SPKI DER bytes and :private-key the raw 32-byte
      ;; seed (PKCS#8 prefix checked, fail closed) — `kagi.cacao/mint` signs
      ;; with the seed through ed25519.core.
@@ -234,8 +234,8 @@
   Returns the loaded identity, or nil when `path` does not exist."
   ([path] (load-existing-identity path nil))
   ([path secret-store*]
-   (when-let [text #?(:clj (let [f (java.io.File. ^String path)]
-                             (when (.exists f) (slurp f)))
+   (when-let [text #?(:clj (let [f (kio/file ^String path)]
+                             (when (kio/exists? f) (slurp f)))
                       :cljs (when (fs/existsSync path) (fs/readFileSync path "utf8")))]
      (let [m* (ensure-key-metadata (edn/read-string text))]
        (when-not (secret-backed-identity? m*)
@@ -258,8 +258,7 @@
     (let [expected (sign-public public-id)
           signer (native-key/bound-signer (:keystore native-signing)
                                            (:handle native-signing) expected)
-          challenge (crypto/sha256 (.getBytes (str "kagi/native-migration/" (UUID/randomUUID))
-                                               "UTF-8"))
+          challenge (crypto/sha256 (kbytes/utf8-bytes (str "kagi/native-migration/" (UUID/randomUUID))))
           signature (crypto/sign-with (crypto/jvm-provider) signer challenge)
           _ (when-not (crypto/verify* (crypto/jvm-provider) expected challenge signature)
               (throw (ex-info "native signing possession self-test failed" {})))
@@ -354,8 +353,8 @@
   ([path provider] (load-or-create-identity! path provider nil))
   ([path provider {:keys [secret-store secret-ref allow-plaintext? allow-existing-plaintext?
                           native-signing]}]
-   (let [f (java.io.File. ^String path)]
-     (if (.exists f)
+   (let [f (kio/file ^String path)]
+     (if (kio/exists? f)
        (let [m (edn/read-string (slurp f))
              m* (ensure-key-metadata m)]
          (if (secret-backed-identity? m*)
@@ -373,8 +372,8 @@
        (let [_ (when native-signing
                  (throw (ex-info "native identity public keys must be provisioned before init" {})))
              id (generate-identity provider)
-             parent (.getParentFile (.getAbsoluteFile f))]
-         (when parent (.mkdirs parent))
+             parent (kio/parent-file (kio/absolute-file f))]
+         (when parent (kio/mkdirs parent))
          (if (and secret-store secret-ref)
            (migrate-identity-secret! path id secret-store secret-ref)
            (if allow-plaintext?

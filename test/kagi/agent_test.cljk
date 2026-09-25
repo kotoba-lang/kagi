@@ -2,7 +2,7 @@
   "The claim this suite has to hold up: an agent principal reads exactly what
   it was granted, with no VMK anywhere in its process, and un-granting takes
   the access away for real rather than on paper."
-  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.lang.text :as str]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest testing is]]
             [kagi.agent :as agent]
             [kagi.agent-protocol :as proto]
@@ -166,7 +166,7 @@
              (:agent/did (:principal (agent/approve p request {:invite invite}))))
           "正しい did はそのまま通る")
       (is (thrown-with-msg?
-           clojure.lang.ExceptionInfo #"agent enrollment refused"
+           kerror/ExceptionInfo #"agent enrollment refused"
            (agent/approve p (assoc request :agent/did "did:key:zSomeoneElse")
                           {:invite invite}))))))
 
@@ -180,7 +180,7 @@
                           :purposes #{} :agent-ttl-sec 3600}]
       (is (:principal (agent/approve p request {:invite invite
                                                 :confirmed-fingerprint fingerprint})))
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (agent/approve p request {:invite invite
                                              :confirmed-fingerprint "AAAA-BBBB-CCCC"}))))))
 

@@ -1,5 +1,5 @@
 (ns kagi.witness-http-test
-  (:require [kotoba.process :as shell]
+  (:require [kotoba.lang.error :as kerror] [kotoba.process :as shell]
             [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.rotation :as rotation]
@@ -60,7 +60,7 @@
       (is (false? (:split-view? (http/gossip! local (http/endpoint server)))))
       (is (= (:checkpoint/id cp)
              (:checkpoint/id (first (service/gossip-snapshot local)))))
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires HTTPS"
+      (is (thrown-with-msg? kerror/ExceptionInfo #"requires HTTPS"
                             (http/fetch-checkpoints "http://witness.example")))
       (finally (.close server)))))
 
@@ -75,7 +75,7 @@
         running (witness-main/start-from-config! config)]
     (try
       (is (re-find #"^http://127\.0\.0\.1:" (:endpoint running)))
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"loopback"
+      (is (thrown-with-msg? kerror/ExceptionInfo #"loopback"
                             (witness-main/validate-config!
                              (assoc config :witness/bind "0.0.0.0"))))
       (is (nil? (:private-keys running)))

@@ -17,18 +17,18 @@
   ;; reader conditional so a JVM consumer neither loads it nor gets linted for
   ;; an unused require.
   #?(:cljs (:require [kotoba.lang.text :as str]))
-  #?(:clj (:import [java.util Base64])))
+  (:require [kotoba.bytes :as kbytes]))
 
 (defn encode
   "bytes → standard base64 with padding."
   [bs]
-  #?(:clj (.encodeToString (Base64/getEncoder) ^bytes bs)
+  #?(:clj (kbytes/base64-encode ^bytes bs)
      :cljs (js/btoa (apply str (map js/String.fromCharCode (array-seq bs))))))
 
 (defn decode
   "standard base64 → the runtime's byte container."
   [s]
-  #?(:clj (.decode (Base64/getDecoder) ^String s)
+  #?(:clj (kbytes/base64-decode-bytes ^String s)
      :cljs (let [bin (js/atob s)
                  out (js/Uint8Array. (.-length bin))]
              (dotimes [i (.-length bin)] (aset out i (.charCodeAt bin i)))
@@ -37,7 +37,7 @@
 (defn encode-url
   "bytes → base64url, no padding. For anything that lands in a URL or a token."
   [bs]
-  #?(:clj (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) ^bytes bs)
+  #?(:clj (kbytes/base64url-encode ^bytes bs {:pad? false})
      :cljs (-> (encode bs)
                (str/replace "+" "-")
                (str/replace "/" "_")
@@ -45,7 +45,7 @@
 
 (defn decode-url
   [s]
-  #?(:clj (.decode (Base64/getUrlDecoder) ^String s)
+  #?(:clj (kbytes/base64url-decode-bytes ^String s)
      :cljs (decode (-> s
                        (str/replace "-" "+")
                        (str/replace "_" "/")

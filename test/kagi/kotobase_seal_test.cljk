@@ -1,5 +1,5 @@
 (ns kagi.kotobase-seal-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.kotobase-seal :as seal]))
 
@@ -17,7 +17,7 @@
     (is (not (re-find #"private" (pr-str (:sealed/ciphertext envelope)))))))
 
 (deftest incomplete-context-fails-closed
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"incomplete"
+  (is (thrown-with-msg? kerror/ExceptionInfo #"incomplete"
                         (seal/sealed-store-options
                          {:provider (crypto/jvm-provider)
                           :compartment "opaque-user-001"}))))

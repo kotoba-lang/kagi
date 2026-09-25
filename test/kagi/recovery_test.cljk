@@ -1,5 +1,5 @@
 (ns kagi.recovery-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.recovery :as recovery]))
 
@@ -10,12 +10,12 @@
     (is (= (seq vmk) (seq (recovery/combine (take 3 shares)))))
     (is (= (seq vmk) (seq (recovery/combine [(shares 0) (shares 2) (shares 4)]))))
     (testing "fewer than threshold shares fail closed"
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"insufficient"
+      (is (thrown-with-msg? kerror/ExceptionInfo #"insufficient"
                             (recovery/combine (take 2 shares)))))
     (testing "duplicates and tampering fail closed"
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"incompatible"
+      (is (thrown-with-msg? kerror/ExceptionInfo #"incompatible"
                             (recovery/combine [(shares 0) (shares 0) (shares 2)])))
       (let [bad (update (shares 2) :recovery/value
                         #(doto (aclone ^bytes %) (aset-byte 0 (byte 0))))]
-        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"integrity"
+        (is (thrown-with-msg? kerror/ExceptionInfo #"integrity"
                               (recovery/combine [(shares 0) (shares 1) bad])))))))

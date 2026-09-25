@@ -4,7 +4,7 @@
   The fake is four functions over an atom because that IS the contract —
   `kagi.store/object-sealed-block-store` takes the same four, and a test that
   needed a real S3 would be testing Backblaze rather than this code."
-  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest testing is]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
@@ -107,7 +107,7 @@
         ;; The refusal now comes from the BLOCK key rather than the catalog
         ;; version, and that is the more fundamental one: the ciphertext under
         ;; `cid:k:v1` is device A's, and device B's is different.
-        (is (thrown? clojure.lang.ExceptionInfo
+        (is (thrown? kerror/ExceptionInfo
                      (sync/object-push! {:fns stale-fns :did did :vault-path (:path dev-b)})))
         (is (= a-block (get @a block-key))
             "1 番目の暗号文はそのまま — これが守りたかった性質")))))
@@ -128,7 +128,7 @@
     (let [{:keys [fns]} (fake-store)
           {:keys [path]} (vault-with "x")]
       (sync/object-push! {:fns fns :did did :vault-path path})
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cloud vault changed since pull"
+      (is (thrown-with-msg? kerror/ExceptionInfo #"cloud vault changed since pull"
                             (sync/object-push! {:fns fns :did did :vault-path path
                                                 :expected-seq 0}))))))
 
@@ -146,7 +146,7 @@
           before (slurp path)]
       (sync/object-push! {:fns fns :did did :vault-path path})
       (swap! a dissoc (str "kagi/" did "/catalog/v1.edn"))
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"HEAD points at a version"
+      (is (thrown-with-msg? kerror/ExceptionInfo #"HEAD points at a version"
                             (sync/object-pull! {:fns fns :did did :vault-path path})))
       (is (= before (slurp path)) "失敗しても vault は元のまま"))))
 

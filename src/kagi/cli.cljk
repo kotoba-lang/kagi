@@ -23,7 +23,7 @@
     kagi rotate <name>              # DEK を回転(再封緘)
     kagi log                        # 監査台帳(hybrid 署名 + ハッシュ鎖)を検証して表示
     kagi whoami                     # 自分の did:key / IPNS graph"
-  (:require [kotoba.bytes :as kbytes] [kotoba.lang.edn :as edn]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.lang.edn :as edn]
             [kotoba.pprint :as pprint]
             [kotoba.lang.text :as str]
             [langgraph.graph :as g]
@@ -587,7 +587,7 @@
         grant (try
                 (device/make-grant p vmk request confirmed
                                    {:ttl-sec (or ttl device/default-ttl-sec)})
-                (catch clojure.lang.ExceptionInfo e
+                (catch kerror/ExceptionInfo e
                   (die (str "device grant refused: "
                             (pr-str (:device/errors (ex-data e)))))))
         out (or (arg-val args "--out") "device-grant.edn")]
@@ -608,7 +608,7 @@
                  (die "no vault — run: kagi pull first (grant unlocks it, it does not create it)"))
         {:keys [vmk wrap device-id]}
         (try (device/accept-grant! p grant {})
-             (catch clojure.lang.ExceptionInfo e
+             (catch kerror/ExceptionInfo e
                (die (str "device accept refused: " (pr-str (:device/errors (ex-data e)))))))
         meta (-> (:meta data)
                  (unlock/add-wrap wrap)
@@ -735,7 +735,7 @@
                        :invite/agent-ttl-sec (:agent-ttl-sec scope)})
         {:keys [token principal]}
         (try (agent/approve p request {:invite invite :confirmed-fingerprint confirmed})
-             (catch clojure.lang.ExceptionInfo e
+             (catch kerror/ExceptionInfo e
                (die (str "agent approval refused: " (pr-str (:agent/errors (ex-data e)))))))]
     ;; The vault is not touched. The member record `:share/grant` needs is
     ;; derived from the principal at grant time (`kagi.agent/member-of`).

@@ -1,5 +1,5 @@
 (ns kagi.passkey-test
-  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.passkey :as passkey]
             [kagi.unlock :as unlock]))
@@ -22,8 +22,8 @@
            (seq (unlock/unlock-with-passkey-prf p wrap (:prf-output consumed)))))
     (is (not (contains? (dissoc consumed :prf-output) :prf-output)))
     (testing "RP substitution and truncated PRF output fail closed"
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (passkey/consume-bridge-input input "evil.example")))
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (passkey/consume-bridge-input (assoc input :prfOutput (b64 (byte-array [1])))
                                                  "vault.example"))))))

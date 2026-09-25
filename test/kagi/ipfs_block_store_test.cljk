@@ -4,7 +4,7 @@
   偽 IPFS は本物と同じ性質だけを持つ: **バイト列を渡すと内容から決まるアドレスを
   返し、同じバイト列は必ず同じアドレスになる**。この 1 点が object store 版との
   違いを生むので、そこを fake で再現しないとテストが別物になる。"
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.store :as store])
   (:import [java.security MessageDigest]))
@@ -40,7 +40,7 @@
   (testing "隠して『IPFS に置ける』と言うと、ポインタをどこに永続化するかの問いが消える"
     (let [{:keys [fns]} (fake-ipfs)]
       (is (thrown-with-msg?
-           clojure.lang.ExceptionInfo #"missing required functions"
+           kerror/ExceptionInfo #"missing required functions"
            (store/ipfs-sealed-block-store (dissoc fns :get-pointer :put-pointer!)))))))
 
 (deftest identical-bytes-need-no-fetch-to-be-recognised-as-a-retry
@@ -57,7 +57,7 @@
         s (store/ipfs-sealed-block-store fns)]
     (store/sealed-put! s "cid:item-1:v1" (byte-array [1 2 3]))
     (is (thrown-with-msg?
-         clojure.lang.ExceptionInfo #"already points at different content"
+         kerror/ExceptionInfo #"already points at different content"
          (store/sealed-put! s "cid:item-1:v1" (byte-array [9 9 9]))))
     (testing "拒否した後も元の内容が読める"
       (is (java.util.Arrays/equals (byte-array [1 2 3])
@@ -72,7 +72,7 @@
       (let [[c _] (first @blocks)]
         (swap! blocks assoc c (byte-array [6 6 6])))
       (is (thrown-with-msg?
-           clojure.lang.ExceptionInfo #"do not match the content address"
+           kerror/ExceptionInfo #"do not match the content address"
            (store/sealed-get s "cid:item-1:v1"))))))
 
 (deftest without-a-verifier-the-gateway-is-trusted

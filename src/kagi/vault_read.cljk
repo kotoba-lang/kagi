@@ -36,7 +36,7 @@
   `execFileSync` で叩き、crypto は `kagi.crypto.noble`（JVM provider と transcript
   互換）。identity は `identity/load-existing-identity` で **読むだけ**（生成しない・
   identity.edn を書き戻さない）。reveal は JVM と同じ `kagi.operation` グラフを通る。"
-  (:require [kotoba.lang.edn :as edn]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.lang.edn :as edn]
             [kotoba.lang.text :as str]
             [kagi.cacao :as cacao]
             [kagi.crypto :as crypto]
@@ -63,7 +63,7 @@
      :cljs (os/homedir)))
 
 (defn- file-exists? [path]
-  #?(:clj (.exists (java.io.File. ^String path))
+  #?(:clj (kio/exists? (kio/file ^String path))
      :cljs (boolean (fs/existsSync path))))
 
 (defn- random-uuid* []
@@ -71,7 +71,7 @@
      :cljs (ncrypto/randomUUID)))
 
 (defn- utf8-string [pt]
-  #?(:clj (String. ^bytes pt "UTF-8")
+  #?(:clj (kbytes/utf8-string ^bytes pt)
      :cljs (.decode (js/TextDecoder. "utf-8") pt)))
 
 (def ^:private aud "https://kotobase.net")
