@@ -3,7 +3,7 @@
 
   The first bricked a live vault outright: every command, including the one
   the error message named as the remedy, exited non-zero."
-  (:require [kotoba.lang.edn]
+  (:require [kotoba.lang.error :as kerror] [kotoba.lang.edn]
             [kotoba.test :refer [deftest is testing]]
             [kagi.cli :as cli]
             [kagi.crypto :as crypto]
@@ -29,7 +29,7 @@
   (testing "the guard itself is right and must keep working"
     (let [p (crypto/jvm-provider)
           [_ path] (plaintext-identity-at! p)]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+      (is (thrown-with-msg? kerror/ExceptionInfo
                             #"plaintext identity requires migration"
                             (identity/load-or-create-identity! path p {}))))))
 
@@ -55,7 +55,7 @@
     (let [p (crypto/jvm-provider)
           [_ path] (plaintext-identity-at! p)]
       (doseq [opts [{} {:secret-ref "keychain://x/y"} nil]]
-        (is (thrown-with-msg? clojure.lang.ExceptionInfo
+        (is (thrown-with-msg? kerror/ExceptionInfo
                               #"plaintext identity requires migration"
                               (identity/load-or-create-identity! path p opts))
             (str "must refuse with " (pr-str opts)))))))
@@ -113,7 +113,7 @@
   (testing "silently replacing somebody else's file would lose whatever it held"
     (let [f (str (java.io.File. (tmp-dir "kagi-record4") "refs.edn"))]
       (spit f "[:not :a :map]")
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+      (is (thrown-with-msg? kerror/ExceptionInfo
                             #"record target is not a map"
                             (#'cli/record-reference!
                              f {:item "a" :compartment "personal"

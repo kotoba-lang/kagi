@@ -6,7 +6,7 @@
   S3 の応答形が実際に噛み合うことを見る —— アダプタだけを fake で試すと、
   『0-255 の vector を返す』という io-storj 側の契約と kagi の `byte[]` の食い違いが
   復号時まで露見しない。"
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.store :as store]))
 
@@ -40,7 +40,7 @@
     (store/sealed-put! s "cid:item-1:v1" (byte-array [1 2 3]))
     (testing "まだ grant が指している前の版の暗号文を黙って消させない"
       (is (thrown-with-msg?
-           clojure.lang.ExceptionInfo #"already holds different ciphertext"
+           kerror/ExceptionInfo #"already holds different ciphertext"
            (store/sealed-put! s "cid:item-1:v1" (byte-array [9 9 9])))))
     (testing "拒否した後も元のバイト列が残っている"
       (is (java.util.Arrays/equals (byte-array [1 2 3])
@@ -63,7 +63,7 @@
                                  (store/sealed-get s "cid:item-1:v1")))))
 
 (deftest the-adapter-refuses-to-be-built-without-both-directions
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs :get-object and :put-object"
+  (is (thrown-with-msg? kerror/ExceptionInfo #"needs :get-object and :put-object"
                         (store/object-sealed-block-store {:get-object (fn [_])}))))
 
 ;; ───────── 実 AEAD の暗号文が往復するか ─────────

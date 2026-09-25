@@ -1,6 +1,6 @@
 (ns kagi.cacao-test
   "自己発行 CACAO の mint→verify 往復・改竄検知・audience 照合。"
-  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text] [kotoba.test :refer [deftest testing is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.lang.text] [kotoba.test :refer [deftest testing is]]
             [kagi.cacao :as cacao]
             [kagi.identity :as identity]
             [ed25519.core :as ed25519]))
@@ -62,7 +62,7 @@
   (testing "did:key の multicodec が 0xED01(Ed25519)でない場合、did-key->public は例外を
             投げ、verify は :ok? false で fail-closed する(黙って別鍵種別のバイト列を
             Ed25519 公開鍵として受理してはいけない)"
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  ;; 0xEC01 = X25519 multicodec, not Ed25519 -- forged via ed25519.core's
                  ;; own base58btc encoder so this is a genuinely well-formed did:key,
                  ;; just of the wrong key type.

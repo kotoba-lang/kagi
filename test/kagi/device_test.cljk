@@ -1,7 +1,7 @@
 (ns kagi.device-test
   "Device enrollment: a second machine gets the vault without the master
   passphrase ever being copied to it."
-  (:require [kotoba.lang.text] [kotoba.test :refer [deftest testing is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.lang.text] [kotoba.test :refer [deftest testing is]]
             [kagi.crypto :as crypto]
             [kagi.device :as device]
             [kagi.secret-store :as secret-store]
@@ -48,7 +48,7 @@
             no way to notice a substituted public key, so this REFUSES rather
             than printing a warning nobody reads"
     (let [{:keys [request]} (request-on-new-device)]
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (device/make-grant (p) (enrolled-vmk) request nil)))
       (is (some #{:fingerprint-missing} (mapv :rule (device/grant-errors request nil)))))))
 
@@ -64,7 +64,7 @@
           "different key, different fingerprint")
       (is (some #{:fingerprint-mismatch}
                 (mapv :rule (device/grant-errors swapped fingerprint))))
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (device/make-grant (p) (enrolled-vmk) swapped fingerprint))))))
 
 (deftest a-mismatch-and-a-missing-check-are-different-codes
@@ -92,7 +92,7 @@
       (is (empty? (device/accept-errors grant (:grant/issued-at grant))))
       (is (some #{:grant-expired}
                 (mapv :rule (device/accept-errors grant "2099-01-01T00:00:00Z"))))
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (device/accept-grant! (p) grant {:store store :now "2099-01-01T00:00:00Z"}))))))
 
 (deftest a-grant-carries-no-key-material-in-the-clear

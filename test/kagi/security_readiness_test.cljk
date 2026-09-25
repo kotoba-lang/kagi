@@ -1,5 +1,5 @@
 (ns kagi.security-readiness-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is testing]]
             [kagi.security-readiness :as readiness]
             [kagi.crypto :as crypto]))
 
@@ -46,11 +46,11 @@
     (is (empty? (:security/blockers result)))))
 
 (deftest attestation-issuance-validates-control-and-digest
-  (is (thrown? clojure.lang.ExceptionInfo
+  (is (thrown? kerror/ExceptionInfo
                (readiness/issue-attestation provider (:secret reviewer) :invented
                                             {:issuer "reviewer" :performed-at now
                                              :artifact-sha256 (apply str (repeat 64 "a"))})))
-  (is (thrown? clojure.lang.ExceptionInfo
+  (is (thrown? kerror/ExceptionInfo
                (readiness/issue-attestation provider (:secret reviewer)
                                             :independent-crypto-review
                                             {:issuer "reviewer" :performed-at now

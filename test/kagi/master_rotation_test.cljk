@@ -1,5 +1,5 @@
 (ns kagi.master-rotation-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.master-rotation :as master]
@@ -57,7 +57,7 @@
         old-vmk (crypto/rand-bytes p 32)
         old-key (master/new-vmk-key-record "2026-07-18T00:00:00Z" "keychain://vmk/0" 0 nil)]
     (is (thrown-with-msg?
-         clojure.lang.ExceptionInfo #"raw VMK"
+         kerror/ExceptionInfo #"raw VMK"
          (master/plan p identity {:items {} :meta {:vmk-key old-key}} old-vmk
                       {:now "2026-07-19T00:00:00Z" :custody-ref "keychain://vmk/1"
                        :wrap-meta (fn [new-vmk] {:forbidden new-vmk})})))))

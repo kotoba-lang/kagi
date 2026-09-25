@@ -99,7 +99,8 @@
             [kagi.store :as store]
             [kagi.vault-read :as vault-read]
             [langgraph.graph :as g])])
-  #?@(:clj [(:import [java.util UUID])]))
+  #?@(:clj [(:import [java.util UUID])])
+  (:require [kotoba.bytes :as kbytes]))
 
 #?(:clj
    (do
@@ -222,7 +223,7 @@
   first. A migration only some callers perform is a migration some callers
   race."
   [home vault-meta]
-  (when (and (not (.exists (java.io.File. ^String (registry-path home))))
+  (when (and (not (io/exists? (io/file ^String (registry-path home))))
              (or (seq (:agent/registry vault-meta)) (seq (:agent/invites vault-meta))))
     (update-registry! home (fn [_] (load-registry home vault-meta)))))
 
@@ -324,11 +325,11 @@
   without an explicit `--agent` became `:no-principal` because the count of
   \"pointers\" was suddenly two."
   [home]
-  (let [d (java.io.File. ^String (agents-dir home))]
-    (when (.isDirectory d)
-      (->> (.listFiles d)
-           (filter #(str/ends-with? (.getName ^java.io.File %) ".edn"))
-           (keep #(try (persist/load* (.getPath ^java.io.File %)) (catch Exception _ nil)))
+  (let [d (io/file ^String (agents-dir home))]
+    (when (io/directory? d)
+      (->> (io/list-files d)
+           (filter #(str/ends-with? (io/file-name %) ".edn"))
+           (keep #(try (persist/load* (io/path %)) (catch Exception _ nil)))
            (filter #(and (map? %) (:agent/id %) (:agent/secret-ref %)))
            vec))))
 
@@ -458,7 +459,7 @@
   (when (= :open (:status session))
     (let [state (run-op! session {:op :item/reveal :item-id item-id} purpose)]
       (when-let [pt (get-in state [:result :plaintext])]
-        (String. ^bytes pt "UTF-8")))))
+        (kbytes/utf8-string ^bytes pt)))))
 
 (defn read-one
   "Like `reveal` but the four outcomes stay distinguishable:
@@ -478,7 +479,7 @@
     :else
     (let [state (run-op! session {:op :item/reveal :item-id item-id} purpose)]
       (if-let [pt (get-in state [:result :plaintext])]
-        {:status :ok :plaintext (String. ^bytes pt "UTF-8")}
+        {:status :ok :plaintext (kbytes/utf8-string ^bytes pt)}
         {:status :denied
          :basis (or (:basis (last (filter #(= :policy-hold (:t %)) (:audit state)))) [])}))))
 

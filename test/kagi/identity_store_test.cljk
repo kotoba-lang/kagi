@@ -1,5 +1,5 @@
 (ns kagi.identity-store-test
-  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
             [kagi.secret-store :as ss]
@@ -34,7 +34,7 @@
         dir (doto (java.io.File/createTempFile "kagi-deny-identity" ".tmp")
               (.delete) (.mkdirs))
         path (str (java.io.File. dir "identity.edn"))]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+    (is (thrown-with-msg? kerror/ExceptionInfo
                           #"refusing to persist plaintext identity"
                           (identity/load-or-create-identity! path p)))
     (is (not (.exists (java.io.File. path))))))
@@ -45,7 +45,7 @@
         file (java.io.File/createTempFile "kagi-legacy-identity" ".edn")]
     (spit file (binding [*print-namespace-maps* false]
               (pr-str (select-keys id (into identity/secret-fields identity/public-fields)))))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires migration"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"requires migration"
                           (identity/load-or-create-identity! (.getPath file) p)))
     (is (= (:did id)
            (:did (identity/load-or-create-identity!
@@ -70,7 +70,7 @@
         native {:keystore :test :handle :test :kem-handle :kem-test}]
     (testing "failed token binding leaves the old exportable keys intact"
       (with-redefs [native-key/bound-signer (fn [& _] (throw (ex-info "wrong alias" {})))]
-        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"wrong alias"
+        (is (thrown-with-msg? kerror/ExceptionInfo #"wrong alias"
                               (identity/migrate-native-signing! path public store native))))
       (is (every? #(contains? (ss/get-edn store ref) %)
                   [:private-b64 :mldsa-private-b64])))
@@ -110,7 +110,7 @@
         (is (map? (identity/migrate-identity-secret! path first-id store ref))))
       (testing "別の鍵は拒否される"
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"refusing to overwrite the identity secret"
+             kerror/ExceptionInfo #"refusing to overwrite the identity secret"
              (identity/migrate-identity-secret! path second-id store ref))))
       (testing "--replace? を明示すれば通る（鍵ローテーションはそう言う）"
         (is (map? (identity/migrate-identity-secret! path second-id store ref

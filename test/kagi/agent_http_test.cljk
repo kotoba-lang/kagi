@@ -6,7 +6,7 @@
   that the last step — turning released ciphertext into a secret — happens in
   the CLIENT. If the server ever started returning plaintext, this suite would
   keep passing only if the SDK also stopped decrypting, and it does not."
-  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest testing is]]
             [kagi.agent :as agent]
             [kagi.agent-client :as client]
@@ -216,12 +216,12 @@
 
 (deftest a-non-loopback-base-url-must-be-https
   (testing "平文で LAN へ token を投げる client は作れない"
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires HTTPS"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"requires HTTPS"
                           (client/client {:base-url "http://10.0.0.5:8080" :tenant "did:key:z1"})))
     (is (map? (client/client {:base-url "https://vault.example" :tenant "did:key:z1"})))
     (is (map? (client/client {:base-url "http://127.0.0.1:9999" :tenant "did:key:z1"})))
     (testing ":tenant は必須 — 経路が tenant を名指すので省略できない"
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":tenant"
+      (is (thrown-with-msg? kerror/ExceptionInfo #":tenant"
                             (client/client {:base-url "https://vault.example"}))))))
 
 (deftest enrollment-does-not-rewrite-the-vault-snapshot

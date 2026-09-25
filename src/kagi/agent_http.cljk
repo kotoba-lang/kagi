@@ -67,7 +67,8 @@
            [java.nio.charset StandardCharsets]
            [java.time Instant]
            [java.time.temporal ChronoUnit]
-           [java.util Base64])]))
+           [java.util Base64])])
+  (:require [kotoba.bytes :as kbytes]))
 
 #?(:clj
    (do
@@ -116,7 +117,7 @@
 
 (defn- reply! [^HttpExchange exchange status accept value]
   (let [[content-type body] (render accept value)
-        bytes (.getBytes ^String body StandardCharsets/UTF_8)
+        bytes (kbytes/utf8-bytes ^String body)
         headers (.getResponseHeaders exchange)]
     (.set headers "content-type" content-type)
     (.set headers "cache-control" "no-store")
@@ -163,7 +164,7 @@
 ;; ───────────────────────────── challenges ─────────────────────────────
 
 (defn- sha256-bytes [s]
-  (crypto/sha256 (.getBytes ^String (str s) "UTF-8")))
+  (crypto/sha256 (kbytes/utf8-bytes ^String (str s))))
 
 (defn- hmac ^bytes [^bytes key ^bytes message]
   (let [m (javax.crypto.Mac/getInstance "HmacSHA256")]
@@ -208,8 +209,8 @@
         bits (or difficulty-bits proto/default-difficulty-bits)
         challenge (.encodeToString b64-url ^bytes (crypto/rand-bytes p 24))
         payload (persist/->edn {:c challenge :d bits :x expires})
-        payload-b64 (.encodeToString b64-url (.getBytes ^String payload "UTF-8"))
-        sig (.encodeToString b64-url (hmac key (.getBytes ^String payload-b64 "UTF-8")))]
+        payload-b64 (.encodeToString b64-url (kbytes/utf8-bytes ^String payload))
+        sig (.encodeToString b64-url (hmac key (kbytes/utf8-bytes ^String payload-b64)))]
     {:challenge_id (str payload-b64 "." sig)
      :algorithm proto/algorithm
      :challenge challenge
@@ -223,13 +224,12 @@
   (try
     (let [[payload-b64 sig] (str/split (str token) #"\." 2)]
       (when (and payload-b64 sig)
-        (let [expected (.encodeToString b64-url (hmac key (.getBytes ^String payload-b64 "UTF-8")))]
+        (let [expected (.encodeToString b64-url (hmac key (kbytes/utf8-bytes ^String payload-b64)))]
           ;; Constant-time: this compares a value an attacker supplies against
           ;; one derived from a key they would like to forge against.
           (when (java.security.MessageDigest/isEqual
-                 (.getBytes ^String expected "UTF-8") (.getBytes ^String sig "UTF-8"))
-            (persist/<-edn (String. (.decode (Base64/getUrlDecoder) ^String payload-b64)
-                                    "UTF-8"))))))
+                 (kbytes/utf8-bytes ^String expected) (kbytes/utf8-bytes ^String sig))
+            (persist/<-edn (kbytes/utf8-string (.decode (Base64/getUrlDecoder) ^String payload-b64)))))))
     (catch Exception _ nil)))
 
 (defn- remember-spent! [spent token]

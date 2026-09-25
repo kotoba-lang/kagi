@@ -1,5 +1,5 @@
 (ns kagi.native-key-test
-  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is]]
             [kagi.native-key :as native-key])
   (:import [java.security KeyStore]))
 
@@ -14,7 +14,7 @@
   (let [ks (doto (KeyStore/getInstance "JCEKS") (.load nil nil))
         h (native-key/handle "memory-test" "missing-ed" "missing-ml")]
     (is (false? (native-key/native-keystore? ks)))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"software keystore"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"software keystore"
                           (native-key/sign ks h (kbytes/utf8-bytes "x"))))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"software keystore"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"software keystore"
                           (native-key/load-keystore "JCEKS" nil nil nil)))))

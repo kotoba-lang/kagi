@@ -10,7 +10,7 @@
   ;; CBOR writer appends to a JS array, Ed25519 goes through `ed25519.core`
   ;; (node:crypto) with the raw 32-byte seed / pubkey, and time is `js/Date`.
   ;; `mint` / `verify` produce and accept the same wire bytes on both runtimes.
-  (:require [cacao.core :as shared]
+  (:require [kotoba.bytes :as kbytes] [cacao.core :as shared]
             [kagi.b64 :as b64]
             [kagi.digest :as digest]
             [kotoba.lang.text :as str]
@@ -19,11 +19,10 @@
      (:import [java.security Signature MessageDigest]
               [java.io ByteArrayOutputStream]
               [java.lang StringBuilder]
-              [java.util Base64]
               [java.time Instant])))
 
 (defn- utf8 [s]
-  #?(:clj (.getBytes ^String s "UTF-8")
+  #?(:clj (kbytes/utf8-bytes ^String s)
      :cljs (.encode (js/TextEncoder.) s)))
 
 ;; ───────── canonical graph CID (mirror of kotobase.cid, via tsumugu port) ─────────
@@ -198,7 +197,7 @@
                      (= info 25) [(bit-or (bit-shift-left (ub b (inc pos)) 8) (ub b (+ pos 2))) (+ pos 3)]
                      :else (throw (ex-info "cbor: unsupported head" {:info info})))]
     (case (int major)
-      3 [#?(:clj (String. (java.util.Arrays/copyOfRange b p1 (+ p1 n)) "UTF-8")
+      3 [#?(:clj (kbytes/utf8-string (java.util.Arrays/copyOfRange b p1 (+ p1 n)))
             :cljs (.decode (js/TextDecoder. "utf-8") (.subarray b p1 (+ p1 n))))
          (+ p1 n)]
       4 (loop [i 0 p p1 acc []]

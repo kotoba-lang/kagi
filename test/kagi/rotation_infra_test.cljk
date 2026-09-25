@@ -1,5 +1,5 @@
 (ns kagi.rotation-infra-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.recovery :as recovery]
             [kagi.rotation :as rotation]
@@ -97,7 +97,7 @@
     (is (recovery/threshold-authorized? p event approvals policy))
     (is (false? (recovery/threshold-authorized? p event [(first approvals) (first approvals)] policy)))
     (is (thrown-with-msg?
-         clojure.lang.ExceptionInfo #"reuses a signing key"
+         kerror/ExceptionInfo #"reuses a signing key"
          (recovery/threshold-authorized?
           p event approvals
           {:k 2 :members #{"a" "alias-of-a"}
@@ -158,9 +158,9 @@
                                        (:checkpoint/id next) (:secret signer))]
     (is (:accepted? (witness-service/submit! service genesis)))
     (is (:accepted? (witness-service/submit! service next)))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"previous link mismatch"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"previous link mismatch"
                           (witness-service/submit! service wrong-link)))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"sequence gap"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"sequence gap"
                           (witness-service/submit! service gap)))
     (is (= 2 (count (witness-service/gossip-snapshot service))))))
 

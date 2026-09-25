@@ -6,7 +6,7 @@
   bucket, releases ciphertext, and the client decrypts. If this passes, `kagi
   agent serve` can run somewhere the vault is not — which is the whole
   prerequisite for putting the API behind a URL."
-  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is testing]]
             [kagi.agent :as agent]
             [kagi.agent-client :as client]
@@ -154,7 +154,7 @@
         ;; simulate a writer that read the registry before another one landed
         (is (some? ((:update-registry! (:docs f)) #(agent/add-invite % #:invite{:id "a"}))))
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"cloud vault changed since pull"
+             kerror/ExceptionInfo #"cloud vault changed since pull"
              (sync/object-write! {:fns (:fns f) :did (:did f) :doc :registry
                                   :expected-seq (:agent/seq reg 0)
                                   :text (persist/->edn (assoc reg :agent/seq 99))})))

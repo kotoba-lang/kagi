@@ -3,7 +3,7 @@
 
   Secret values may enter this namespace, but should not be returned, logged, or
   printed. Public results only contain operational metadata."
-  (:require [clojure.java.io :as io]))
+  (:require [kotoba.io :as io]))
 
 (defprotocol Clipboard
   (copy! [clipboard s])

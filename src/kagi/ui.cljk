@@ -37,7 +37,7 @@
   the socket, so this namespace only ever receives metadata, and
   `kagi.ui-test` asserts a plaintext handed to the renderer cannot come back
   out of it."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.http.form-urlencoded :as form-urlencoded] [kotoba.lang.text :as str]
             [jp-go-dds.core :as dds]
             [jp-go-dds.page :as dds-page]
             [jp-go-dds.tokens :as dds-tokens]))
@@ -140,7 +140,7 @@
 (defn- hidden [name value] [:input {:type "hidden" :name name :value (str value)}])
 
 (defn- url-encode [s]
-  #?(:clj (java.net.URLEncoder/encode (str s) "UTF-8")
+  #?(:clj (form-urlencoded/form-encode (str s))
      :cljs (js/encodeURIComponent (str s))))
 
 (defn matching-items

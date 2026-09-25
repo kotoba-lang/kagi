@@ -29,7 +29,8 @@
               [javax.crypto Cipher Mac KEM KeyAgreement]
               [javax.crypto.spec SecretKeySpec GCMParameterSpec]
               [org.bouncycastle.crypto.generators Argon2BytesGenerator]
-              [org.bouncycastle.crypto.params Argon2Parameters Argon2Parameters$Builder])))
+              [org.bouncycastle.crypto.params Argon2Parameters Argon2Parameters$Builder]))
+  (:require [kotoba.bytes :as kbytes]))
 
 ;; ───────── Provider seam ─────────
 
@@ -88,7 +89,7 @@
 (defn utf8-bytes
   "文字列を UTF-8 バイト列へ。HKDF の `info` ラベル用。"
   [s]
-  #?(:clj (.getBytes ^String s "UTF-8")
+  #?(:clj (kbytes/utf8-bytes ^String s)
      :cljs (.encode (js/TextEncoder.) s)))
 
 (defn burn!
@@ -244,14 +245,13 @@
   ^bytes [^bytes pass ^bytes salt {:keys [m-kb t p] :or {m-kb 262144 t 3 p 4}}]
   (loop [i 0
          out (hkdf-sha256 pass salt
-                          (.getBytes (str "kagi/argon2id-compat/v1:"
-                                          m-kb ":" t ":" p)
-                                     "UTF-8")
+                          (kbytes/utf8-bytes (str "kagi/argon2id-compat/v1:"
+                                          m-kb ":" t ":" p))
                           32)]
     (if (< i (max 1 (int t)))
       (recur (inc i)
              (hkdf-sha256 out salt
-                          (ba [(.getBytes "kagi/argon2id-compat/round" "UTF-8")
+                          (ba [(kbytes/utf8-bytes "kagi/argon2id-compat/round")
                                [(byte (bit-and i 0xff))]])
                           32))
       out)))

@@ -1,5 +1,5 @@
 (ns kagi.repository-context-test
-  (:require [kotoba.bytes :as kbytes] [kotoba.io :as io]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.io :as io]
             [kotoba.test :refer [deftest is]]
             [kagi.crypto :as crypto]
             [kagi.identity :as identity]
@@ -11,7 +11,7 @@
 
 (deftest missing-vault-fails-before-unlock
   (is (thrown-with-msg?
-       clojure.lang.ExceptionInfo #"vault and identity"
+       kerror/ExceptionInfo #"vault and identity"
        (context/load-context {:vault-home
                               (str (System/getProperty "java.io.tmpdir")
                                    "/kagi-missing-repository-context")}))))
@@ -26,7 +26,7 @@
      (io/path (io/file home "identity.edn")) provider
      {:allow-plaintext? true})
     (is (thrown-with-msg?
-         clojure.lang.ExceptionInfo #"SecretStore-backed"
+         kerror/ExceptionInfo #"SecretStore-backed"
          (context/load-context
           {:vault-home home :provider provider
            :unlock-vmk-fn (fn [_ _] vmk)})))))
@@ -101,7 +101,7 @@
                           (kbytes/base64-encode
                                            ^bytes (:vmk rotated)))))
       (is (thrown-with-msg?
-           clojure.lang.ExceptionInfo #"stale"
+           kerror/ExceptionInfo #"stale"
            (context/prepare-repository-vmk-rotation
             {:vault-home home :provider provider
              :repository-id "user-storage-a"

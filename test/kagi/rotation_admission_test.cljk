@@ -1,5 +1,5 @@
 (ns kagi.rotation-admission-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is testing]]
             [kagi.crypto :as crypto]
             [kagi.recovery :as recovery]
             [kagi.rotation :as rotation]
@@ -24,10 +24,10 @@
                         :key-id "k0" :epoch 0 :parent nil}
               :old-public (:public old) :new-public (:public new)}]
     (is (:stored? (admission/admit! store p event opts)))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"rejected"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"rejected"
                           (admission/admit! (temp-store) p event
                                             (assoc-in opts [:current :epoch] 1))))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"rejected"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"rejected"
                           (admission/admit! (temp-store) p event
                                             (assoc opts :old-public (:public new)))))))
 
@@ -61,18 +61,18 @@
                                :public-of #(get-in witness-keys [% :public])}}]
     (is (:stored? (admission/admit! (temp-store) p event opts)))
     (testing "one recovery approver cannot satisfy 2-of-3"
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (admission/admit! (temp-store) p
                                      (assoc event :rotation/recovery-approvals
                                                   [(first approvals)]) opts))))
     (testing "out-of-band policy substitution is rejected"
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (admission/admit! (temp-store) p event
                                      (assoc-in opts [:recovery-policy :policy-cid]
                                                "attacker-policy")))))
     (testing "two witness ids backed by one physical key cannot satisfy quorum"
       (is (thrown-with-msg?
-           clojure.lang.ExceptionInfo #"witness policy reuses"
+           kerror/ExceptionInfo #"witness policy reuses"
            (admission/admit!
             (temp-store) p event
             (assoc opts :witness-policy
@@ -85,7 +85,7 @@
                                                            :from-key "a" :to-key "b"
                                                            :from-epoch 0}))]
                                              nil (get-in witness-keys ["w2" :secret]))]
-        (is (thrown? clojure.lang.ExceptionInfo
+        (is (thrown? kerror/ExceptionInfo
                      (admission/admit! (temp-store) p
                                        (assoc event :rotation/witness-checkpoints
                                                     [(first checkpoints) wrong]) opts)))))))
@@ -106,7 +106,7 @@
                         :key-id "k0" :epoch 0 :parent nil}
               :old-public (:public old)}]
     (admission/admit! store p a (assoc base :new-public (:public a-key)))
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (admission/admit! store p b (assoc base :new-public (:public b-key)))))
     (is (= [(:rotation/id a)] (mapv :rotation/id (rotation-store/events store))))
     (is (empty? (rotation-store/quarantined store)))))

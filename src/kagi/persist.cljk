@@ -4,13 +4,12 @@
   ;; kbb (sci on Node) reads the `:cljs` branches: `<-edn` / `->edn` / `load*`
   ;; only. `save!` is JVM-only on purpose — the kbb path is the read seam
   ;; (kagi.vault-read) and must not be able to write vault.edn.
-  (:require [kotoba.lang.coll :as walk]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.coll :as walk]
             [kotoba.lang.edn :as edn]
             #?(:cljs ["node:fs" :as fs]))
   #?(:clj
-     (:import [java.util Base64]
+     (:import
               [java.nio ByteBuffer]
-              [java.nio.charset StandardCharsets]
               [java.nio.file Files Paths StandardCopyOption CopyOption StandardOpenOption]
               [java.nio.file.attribute PosixFilePermissions FileAttribute]
               [java.nio.channels FileChannel])))
@@ -24,7 +23,7 @@
            (get (swap! path-locks #(if (contains? % key) % (assoc % key (Object.)))) key)))))
 
 (defn- enc [x]
-  #?(:clj (if (bytes? x) {:kagi/b64 (.encodeToString (Base64/getEncoder) ^bytes x)} x)
+  #?(:clj (if (bytes? x) {:kagi/b64 (kbytes/base64-encode ^bytes x)} x)
      :cljs (if (instance? js/Uint8Array x)
              {:kagi/b64 (.toString (js/Buffer.from (.-buffer x) (.-byteOffset x) (.-length x))
                                    "base64")}
@@ -32,7 +31,7 @@
 
 (defn- dec* [x]
   (if (and (map? x) (contains? x :kagi/b64))
-    #?(:clj (.decode (Base64/getDecoder) ^String (:kagi/b64 x))
+    #?(:clj (kbytes/base64-decode-bytes ^String (:kagi/b64 x))
        ;; A plain Uint8Array (not the Buffer subclass): the noble provider and
        ;; every `instance? js/Uint8Array` check downstream see the same type the
        ;; browser path produces.
@@ -59,7 +58,7 @@
                 _lock (.lock lock-channel)]
       (let [tmp (Files/createTempFile parent ".kagi-persist-" ".tmp"
                                       (make-array FileAttribute 0))
-            payload (.getBytes (->edn data) StandardCharsets/UTF_8)]
+            payload (kbytes/utf8-bytes (->edn data))]
         (try
           (try
             (Files/setPosixFilePermissions tmp (PosixFilePermissions/fromString "rw-------"))

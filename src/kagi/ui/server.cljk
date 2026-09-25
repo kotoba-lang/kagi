@@ -40,22 +40,20 @@
   ;; `kagi.ui` and `clojure.java.io` are used only by the JVM half below, so
   ;; they are required only there — a `.cljc` that requires what its cljs
   ;; branch never uses is a `.clj` wearing a different extension.
-  (:require #?@(:clj [[clojure.java.io :as io]
+  (:require [kotoba.http.form-urlencoded :as form-urlencoded] [kotoba.bytes :as kbytes] #?@(:clj [[kotoba.io :as io]
                       [kagi.ui :as ui]])
             [kotoba.lang.text :as str])
   #?(:clj
      (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
               [java.io ByteArrayOutputStream]
-              [java.net InetAddress InetSocketAddress URLDecoder]
-              [java.nio.charset StandardCharsets]
+              [java.net InetAddress InetSocketAddress]
               [java.security MessageDigest]
-              [java.util Base64]
               [java.util.concurrent Executors ThreadFactory TimeUnit])))
 
 ;; ── the portable half: what a request says ─────────────────────────────────
 
 (defn- url-decode [s]
-  #?(:clj (URLDecoder/decode (str s) "UTF-8")
+  #?(:clj (form-urlencoded/form-decode (str s))
      :cljs (js/decodeURIComponent (str/replace (str s) "+" " "))))
 
 (defn form-decode
@@ -118,15 +116,15 @@
 
      (defn- constant-time= [^String a ^String b]
        (and a b
-            (MessageDigest/isEqual (.getBytes a StandardCharsets/UTF_8)
-                                   (.getBytes b StandardCharsets/UTF_8))))
+            (MessageDigest/isEqual (kbytes/utf8-bytes a)
+                                   (kbytes/utf8-bytes b))))
 
      (defn- mint-token
        "32 bytes from the vault's own CSPRNG seam, url-safe. `rand-fn` is passed
        in rather than requiring kagi.crypto, so this namespace stays free of the
        provider — and so a test can watch what it does with a known token."
        [rand-fn]
-       (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) ^bytes (rand-fn 32)))
+       (kbytes/base64url-encode ^bytes (rand-fn 32) {:pad? false}))
 
      (defn- read-body ^String [^HttpExchange exchange]
        (with-open [in (.getRequestBody exchange)
@@ -145,7 +143,7 @@
 
      (defn- respond!
        [^HttpExchange exchange status content-type body & {:keys [headers]}]
-       (let [bytes (.getBytes ^String (or body "") StandardCharsets/UTF_8)
+       (let [bytes (kbytes/utf8-bytes ^String (or body ""))
              out-headers (.getResponseHeaders exchange)]
          (.set out-headers "content-type" content-type)
          (.set out-headers "cache-control" "no-store")
