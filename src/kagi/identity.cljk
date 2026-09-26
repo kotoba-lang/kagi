@@ -15,6 +15,7 @@
             [ipns.core :as ipns]
             [kagi.b64 :as b64*]
             [kagi.crypto :as crypto]
+            #?(:clj [kagi.local-edn :as local-edn])
             #?(:clj [kagi.native-key :as native-key])
             #?(:cljs [kagi.crypto.noble :as noble])
             #?(:cljs ["node:fs" :as fs])
@@ -234,10 +235,11 @@
   Returns the loaded identity, or nil when `path` does not exist."
   ([path] (load-existing-identity path nil))
   ([path secret-store*]
-   (when-let [text #?(:clj (let [f (kio/file ^String path)]
-                             (when (kio/exists? f) (slurp f)))
-                      :cljs (when (fs/existsSync path) (fs/readFileSync path "utf8")))]
-     (let [m* (ensure-key-metadata (edn/read-string text))]
+   (when-let [m #?(:clj (let [f (kio/file ^String path)]
+                          (when (kio/exists? f) (local-edn/read-file path)))
+                   :cljs (when (fs/existsSync path)
+                           (edn/read-string (fs/readFileSync path "utf8"))))]
+     (let [m* (ensure-key-metadata m)]
        (when-not (secret-backed-identity? m*)
          (throw (ex-info "plaintext identity requires migration"
                          {:path path
@@ -355,7 +357,7 @@
                           native-signing]}]
    (let [f (kio/file ^String path)]
      (if (kio/exists? f)
-       (let [m (edn/read-string (slurp f))
+       (let [m (local-edn/read-file path)
              m* (ensure-key-metadata m)]
          (if (secret-backed-identity? m*)
            (do

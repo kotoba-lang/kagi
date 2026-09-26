@@ -6,6 +6,7 @@
   ;; (kagi.vault-read) and must not be able to write vault.edn.
   (:require [kotoba.bytes :as kbytes] [kotoba.lang.coll :as walk]
             [kotoba.lang.edn :as edn]
+            #?(:clj [kagi.local-edn :as local-edn])
             #?(:cljs ["node:fs" :as fs]))
   #?(:clj
      (:import
@@ -91,6 +92,6 @@
 
 (defn load* [path]
   #?(:clj (let [f (java.io.File. ^String path)]
-            (when (.exists f) (<-edn (slurp f))))
+            (when (.exists f) (walk/postwalk dec* (local-edn/read-file path))))
      :cljs (when (fs/existsSync path)
              (<-edn (fs/readFileSync path "utf8")))))
