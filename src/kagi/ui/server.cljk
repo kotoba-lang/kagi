@@ -36,7 +36,7 @@
   those literals. A guard that returns the same 403 for 'no session', 'wrong
   origin' and 'stale form' can be broken in one of those three ways and go on
   passing its own tests (the workspace rule about checks that cannot say what
-  they refused — CLAUDE.md, 'the six questions')."
+  they refused — AGENTS.md, 'the six questions')."
   ;; `kagi.ui` and `clojure.java.io` are used only by the JVM half below, so
   ;; they are required only there — a `.cljc` that requires what its cljs
   ;; branch never uses is a `.clj` wearing a different extension.

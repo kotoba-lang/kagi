@@ -5,7 +5,7 @@
   Every rejection below checks the reason string, not just the status. A test
   that only asserts 403 passes when the request was refused for some other
   reason entirely — which is how a control ends up green while the thing it
-  claims to guard is wide open (CLAUDE.md, 'the six questions', item 6)."
+  claims to guard is wide open (AGENTS.md, 'the six questions', item 6)."
   (:require [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is testing]]
             [kagi.ui :as ui]
