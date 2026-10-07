@@ -1,0 +1,17 @@
+(ns kagi.wifi-replica-runtime
+ (:require [kagi.wifi-replica :as replica] ["node:crypto" :as nc]))
+(defn digest [b] (.digest (.update (nc/createHash "sha256") (js/Uint8Array.from (into-array b))) "hex"))
+(defn provider [origin]
+ (let [objects (atom {})]
+  {:name origin :origin origin
+   :put! (fn [key bytes] (swap! objects assoc key bytes) key)
+   :get #(get @objects %)}))
+(def key (replica/object-key (apply str (repeat 64 "a")) (apply str (repeat 64 "b"))))
+(-> (replica/replicate! {:providers [(provider "https://fixture-one") (provider "https://fixture-two")] :digest digest} key [4 5 6 7])
+ (.then (fn [receipt]
+  (assert (= 2 (:verified-readbacks receipt)))
+  (assert (= (digest [4 5 6 7]) (:digest receipt)))
+  (assert (not (contains? receipt :bytes)))
+  (replica/replicate! {:providers [(assoc (provider "https://corrupt") :get (fn [_] [9 9 9 9]))] :digest digest} key [4 5 6 7])))
+ (.then (fn [_] (throw (ex-info "Corrupt replica accepted" {:test true}))))
+ (.catch (fn [e] (assert (= "Encrypted replica could not be verified" (ex-message e))) (println "PASS verified replica read-back receipts and corrupt read-back refusal (fixture transports)"))))

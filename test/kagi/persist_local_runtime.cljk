@@ -1,0 +1,19 @@
+(ns kagi.persist-local-runtime (:require [kagi.persist :as persist] [kotoba.lang.edn :as edn] ["node:fs" :as fs]))
+(def path (str (.cwd js/process) "/test/.large-vault-test-" (random-uuid) ".edn"))
+;; Multiple bounded strings exercise whole-file size without relaxing any string,
+;; token, nesting, tag or node-count bound.
+(def data (vec (repeat 9 (apply str (repeat 1000000 "a")))))
+(try
+ (fs/writeFileSync path (pr-str data) #js {:mode 384})
+ (assert (= 9 (count (persist/load* path))))
+ (assert (= (* 8 1024 1024) edn/max-edn-bytes))
+ (try (edn/read-string (fs/readFileSync path "utf8"))
+      (throw (ex-info "Network reader limit changed" {:test true}))
+      (catch :default e (assert (not (:test (ex-data e))))))
+ (let [fd (fs/openSync path "r+")]
+  (try (fs/ftruncateSync fd (inc persist/max-local-vault-bytes)) (finally (fs/closeSync fd))))
+ (try (persist/load* path)
+      (throw (ex-info "Oversized vault accepted" {:test true}))
+      (catch :default e (assert (= "Local vault exceeds bounded read limit" (ex-message e)))))
+ (println "PASS bounded local vault larger than 8MiB; network limit preserved; oversized file refused before reading")
+ (finally (fs/unlinkSync path)))

@@ -1,0 +1,40 @@
+(ns kagi.wifi-replica
+  "Asynchronous replication of an already sealed kagi block.
+   Hosts inject configured object/IPFS transports and a trusted SHA256 digest.
+   No plaintext, vault master keys, credentials, or account names in object keys."
+  (:require [kagi.crypto :as crypto]))
+(defn- then [v f] #?(:clj (f v) :cljs (.then (js/Promise.resolve v) f)))
+(defn- all [xs] #?(:clj (vec xs) :cljs (.then (js/Promise.all (into-array xs)) #(vec (array-seq %)))))
+(defn- fail [] (throw (ex-info "Encrypted replica could not be verified" {})))
+(defn object-key [account-digest item-digest]
+  (when-not (and (re-matches #"[0-9a-f]{64}" (str account-digest))
+                (re-matches #"[0-9a-f]{64}" (str item-digest))) (fail))
+  (str "murakumo/wifi/v1/" account-digest "/" item-digest))
+(defn replicate!
+  "PUT the sealed bytes, then fetch them through EACH independently configured
+   provider. Only verified read-backs produce a receipt. :digest is a trusted
+   host SHA256 function; :put! returns an immutable provider reference.
+   Same origin aliases are rejected. Receipts contain only names, references,
+   digest, and length; host must persist receipts in the encrypted account vault."
+  [{:keys [providers digest]} key sealed]
+  (when-not (and (seq providers) digest (pos? (count sealed))
+                (= (count providers) (count (set (map :origin providers))))
+                (every? #(and (:name %) (:origin %) (:put! %) (:get %)) providers)) (fail))
+  (then (digest sealed)
+    (fn [expected]
+      (when-not (re-matches #"[0-9a-f]{64}" (str expected)) (fail))
+      (then
+        (all (map (fn [{:keys [name put! get]}]
+                    (then (put! key sealed)
+                      (fn [ref]
+                        (when-not (and (string? ref) (seq ref)) (fail))
+                        (then (get ref)
+                          (fn [downloaded]
+                            (when-not (= (count sealed) (count downloaded)) (fail))
+                            (then (digest downloaded)
+                              (fn [actual]
+                                (when-not (= expected actual) (fail))
+                                {:provider name :ref ref}))))))) providers))
+        (fn [receipts] {:schema "kagi.wifi-replica.v1" :digest expected
+                        :size (count sealed) :replicas receipts
+                        :verified-readbacks (count receipts)})))))

@@ -90,8 +90,16 @@
             (Files/deleteIfExists tmp)))))))
   data))
 
+(def max-local-vault-bytes (* 32 1024 1024))
+
 (defn load* [path]
   #?(:clj (let [f (java.io.File. ^String path)]
             (when (.exists f) (walk/postwalk dec* (local-edn/read-file path))))
      :cljs (when (fs/existsSync path)
-             (<-edn (fs/readFileSync path "utf8")))))
+             (let [size (.-size (fs/statSync path))]
+               (when (> size max-local-vault-bytes)
+                 (throw (ex-info "Local vault exceeds bounded read limit" {})))
+               ;; This is a synchronous Node-only read: no async callback can
+               ;; observe this scoped override. Network EDN retains its 8MiB cap.
+               (with-redefs [edn/max-edn-bytes max-local-vault-bytes]
+                 (<-edn (fs/readFileSync path "utf8")))))))

@@ -1,0 +1,35 @@
+(ns kagi.wifi
+  "Wi-Fi glue for the existing governed vault actor. This namespace produces
+  requests; only kagi.operation executes sealing, storage and reveals."
+  (:require [kagitaba.wifi :as wifi] [kotoba.bytes :as bytes] [kagi.crypto :as crypto]
+            [kotoba.lang.edn :as edn]))
+(defn create-request [profile]
+  (wifi/network profile)
+  {:op :item/create :item-id (:item/id profile) :compartment "wifi"
+   :category :wireless-router :classification :restricted :plaintext (crypto/utf8-bytes (pr-str profile))})
+(defn reveal-request [item-id]
+  {:op :item/reveal :item-id item-id :classification :restricted
+   :output-classification :restricted})
+(defn choices
+  "Login is distinct from vault unlock. Offline/manual setup always survives."
+  [{:keys [authenticated? vault-unlocked? storage-available? profiles]}]
+  (cond-> [{:action :manual :enabled? true}]
+    (and authenticated? vault-unlocked? storage-available? (seq profiles))
+    (conj {:action :saved :enabled? true})))
+(defn transfer-network
+  "Consume only a completed governed reveal result. The host supplies its
+  verified account principal and short-lived, physically matched Node session.
+  No standing vault grant or key is transferred. Return plaintext only for
+  immediate encryption by the provisioning transport; never log this value."
+  [{:keys [effect plaintext]} {:keys [principal node-id matched-node-id
+                                     confirmed? expires now]}]
+  (when-not (and (= :revealed effect) plaintext (string? principal) (seq principal)
+                 (string? node-id) (seq node-id) (= node-id matched-node-id)
+                 (true? confirmed?) (number? now) (number? expires)
+                 (< now expires) (<= (- expires now) 600000))
+    (throw (ex-info "Wi-Fi transfer not authorized" {})))
+  (let [profile (edn/read-string (bytes/utf8-string plaintext))
+        network (wifi/network profile)]
+    (when-not (= principal (:principal network))
+      (throw (ex-info "Wi-Fi account mismatch" {})))
+    (dissoc network :principal)))

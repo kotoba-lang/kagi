@@ -1,0 +1,35 @@
+(ns kagi.wifi-runtime
+  (:require [kagi.wifi :as wifi] [kagitaba.wifi :as profile]
+            [kagi.crypto :as crypto] [kagi.crypto.noble :as noble]
+            [kagi.store :as store] [kagi.operation :as op] [langgraph.graph :as graph]))
+(def p (profile/profile {:id "random-item-id" :principal "fixture-account" :ssid "fixture-ssid"
+                         :password "fixture-password" :security :wpa2-personal}))
+(def cr (noble/noble-provider))
+(def st (store/mem-store {:members {"did:key:zOwner" #:member{:did "did:key:zOwner" :role :owner}}}))
+(def actor (op/build st {:crypto cr}))
+(def owner {:did "did:key:zOwner" :role :owner :phase 1 :vmk (crypto/rand-bytes cr 32)
+            :clearance :restricted :purpose :wifi-provision :now "2026-10-07T00:00:00Z"})
+(defn run [req ctx] (:state (graph/run* actor {:request req :context ctx}
+                            {:thread-id (str (random-uuid))})))
+(def saved (run (wifi/create-request p) owner))
+(assert (= :stored (get-in saved [:result :effect])))
+(assert (not (.includes (pr-str (store/item st "random-item-id")) "fixture-password")))
+(assert (not (.includes (pr-str (store/ledger st)) "fixture-password")))
+(def revealed (run (wifi/reveal-request "random-item-id") owner))
+(def consent {:principal "fixture-account" :node-id "node-session" :matched-node-id "node-session"
+              :confirmed? true :now 1000 :expires 2000})
+(assert (= {:ssid "fixture-ssid" :password "fixture-password" :security :wpa2-personal}
+           (wifi/transfer-network (:result revealed) consent)))
+(doseq [bad [(assoc consent :principal "other-account") (assoc consent :confirmed? false)
+             (assoc consent :matched-node-id "other-node") (assoc consent :now 2000)]]
+  (try (wifi/transfer-network (:result revealed) bad)
+       (throw (ex-info "unauthorized transfer accepted" {:test true}))
+       (catch :default e (assert (empty? (ex-data e))))))
+(assert (= :held (get-in (run (wifi/reveal-request "random-item-id")
+                            {:did "did:key:zViewer" :role :viewer :phase 1
+                             :purpose :wifi-provision :now (:now owner)}) [:result :effect])))
+(assert (= [{:action :manual :enabled? true}]
+           (wifi/choices {:authenticated? true :vault-unlocked? false :storage-available? true :profiles [p]})))
+(assert (= 2 (count (wifi/choices {:authenticated? true :vault-unlocked? true
+                                  :storage-available? true :profiles [p]}))))
+(println "Wi-Fi vault: real governed seal/reveal, refusal and transfer checks passed (memory store)")
