@@ -1,5 +1,10 @@
 # Native kagi v1
 
+The foundation below records the original public-verifier/core contract.
+The 2026-10-24 [native local host candidate](native-local-host.md) adds the
+separate private host/journal entry and bounded role-purpose sets. Production
+custody and the foundation artifact lock are not silently promoted by it.
+
 Owner decision 2026-10-23: native Kotoba / Amu selfhost only; no old-key,
 vault-format compatibility or migration. This supersedes the hosted
 providers and old-vault acceptance criteria in ADR 0002. Existing user

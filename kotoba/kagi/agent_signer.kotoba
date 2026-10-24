@@ -125,7 +125,15 @@
            (if revoked "revoked" "active") " " (kg-field event 4) " " (kg-field event 5) " " (kg-field event 6) " " (kg-field event 7)))))
 
 ;; policy: prefix agent|node scope audience delegate purpose max-ttl-ms
-;; One exact purpose / scope / audience; no wildcard or transitive delegation.
+;; Exact scope / audience; individual purposes or the two bounded role sets.
+;; Neither set crosses the node/agent boundary or permits arbitrary signing.
+(defn kg-purpose-allowed? [policy :string purpose :string] :bool
+  (let [declared (kg-field policy 5)]
+    (or (and (= declared purpose) (not= declared "node-statements") (not= declared "cell-writes"))
+        (and (= declared "node-statements") (= (kg-field policy 1) "node")
+             (or (= purpose "node-declaration") (= purpose "node-heartbeat")))
+        (and (= declared "cell-writes") (= (kg-field policy 1) "agent")
+             (or (= purpose "cell-action") (= purpose "state-commit"))))))
 (defn kg-policy-problem [policy :string] :string
   (cond (not (kg-line? policy 7)) "signer/policy-shape"
         (not= (kg-field policy 0) "kagi.agent.policy.v1") "signer/policy-version"
@@ -133,9 +141,9 @@
                   (kg-public? (kg-field policy 4)) (> (kg-number (kg-field policy 6)) 0)
                   (<= (kg-number (kg-field policy 6)) 60000))) "signer/policy-fields"
         (not (or (and (= (kg-field policy 1) "agent")
-                      (or (= (kg-field policy 5) "cell-action") (= (kg-field policy 5) "state-commit")))
+                      (or (= (kg-field policy 5) "cell-action") (= (kg-field policy 5) "state-commit") (= (kg-field policy 5) "cell-writes")))
                  (and (= (kg-field policy 1) "node")
-                      (or (= (kg-field policy 5) "node-declaration") (= (kg-field policy 5) "node-heartbeat"))))) "signer/role-purpose"
+                      (or (= (kg-field policy 5) "node-declaration") (= (kg-field policy 5) "node-heartbeat") (= (kg-field policy 5) "node-statements"))))) "signer/role-purpose"
         :else ""))
 ;; permit: prefix keyset head epoch purpose scope audience body parent fence sequence issued expires
 (defn kg-permit-problem [state :string policy :string permit :string signature :string now :i64
@@ -152,7 +160,7 @@
       (cond
         (or (not= (kg-field permit 1) (kg-field state 1)) (not= (kg-field permit 2) (kg-field state 2))
             (not= epoch (kg-number (kg-field state 3)))) "signer/keyset-head-epoch"
-        (or (not= (kg-field permit 4) (kg-field policy 5)) (not= (kg-field permit 5) (kg-field policy 2))
+        (or (not (kg-purpose-allowed? policy (kg-field permit 4))) (not= (kg-field permit 5) (kg-field policy 2))
             (not= (kg-field permit 6) (kg-field policy 3))) "signer/purpose-scope-audience"
         (not (and (kg-hex? (kg-field permit 7) 64) (kg-hex? (kg-field permit 8) 64))) "signer/digest"
         (or (< fence 0) (< requested-fence 0) (not= requested-fence fence) (not= (kg-field permit 8) parent)) "signer/writer-fence-parent"

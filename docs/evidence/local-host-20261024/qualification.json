@@ -1,0 +1,19 @@
+{
+  "schema": "kagi.native-local-host.qualification.v1",
+  "hostCases": 16,
+  "coreCases": 32,
+  "replayMutationResult": 31,
+  "privateStoreCasesPerLinuxArchitecture": 19,
+  "elfHasInterpreter": false,
+  "independentCustody": false,
+  "productionQualified": false,
+  "oldKeyDataAccessed": false,
+  "boundaries": [
+    "new local fixtures only",
+    "same administrator controls software author, delegate and guardian",
+    "native build and execution; Python/Podman diagnostic orchestration",
+    "no native installer/CDCI adoption",
+    "no Cell or distributed head freshness qualification"
+  ],
+  "agentBotIsolationCases": 7
+}

@@ -22,25 +22,31 @@
   (let [written (typed-cap-call 39 :string :string (str "kagi assemble: " s "\n"))] 2))
 (defn main [] :i64
   (let [mode (ka-arg 0) sha-path (ka-arg 1) ed-path (ka-arg 2) root (ka-arg 3) out (ka-arg 4)]
-    (if (or (not (or (= mode "gate") (= mode "cli"))) (= sha-path "") (= ed-path "")
+    (if (or (not (or (= mode "gate") (= mode "cli") (= mode "host"))) (= sha-path "") (= ed-path "")
             (= root "") (= out "") (not= (ka-arg 5) ""))
-      (ka-error "usage: <gate|cli> <sha2-source> <ed25519-source> <repo-root> <output-source>")
+      (ka-error "usage: <gate|cli|host> <sha2-source> <ed25519-source> <repo-root> <output-source>")
       (let [sha (ka-read sha-path) ed (ka-read ed-path)]
         (if (or (not= (ka-hash sha) "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888")
                 (not= (ka-hash ed) "47c086f3d93ad4f6da047bbf3b9250f7e4fbc7539ec1a0077abb2d82ceb3dc14"))
           (ka-error "owner source digest mismatch; no output written")
           (let [core (ka-read (str root "/kotoba/kagi/agent_signer.kotoba"))
-                entry (ka-read (str root (if (= mode "cli") "/kotoba/kagi/cli.kotoba" "/test/native/agent_signer_gate.kotoba")))
+                entry (ka-read (str root (if (= mode "gate") "/test/native/agent_signer_gate.kotoba" "/kotoba/kagi/cli.kotoba")))
+                host (if (= mode "host") (ka-read (str root "/kotoba/kagi/host.kotoba")) "")
                 vectors (if (= mode "gate") (ka-read (str root "/test/native/agent_signer_vectors.kotoba")) "")
                 sha-body (ka-body sha) ed-body (ka-body ed) core-body (ka-body core) entry-body (ka-body entry)
-                vectors-body (if (= mode "gate") (ka-body vectors) "")]
+                vectors-body (if (= mode "gate") (ka-body vectors) "")
+                host-body (if (= mode "host") (ka-body host) "")
+                cli-main (if (= mode "host") (string-index-of entry-body "(defn main []") -1)]
             (if (or (= sha-body "") (= ed-body "") (= core-body "") (= entry-body "")
-                    (and (= mode "gate") (= vectors-body "")))
+                    (and (= mode "gate") (= vectors-body ""))
+                    (and (= mode "host") (or (= host-body "") (< cli-main 0))))
               (ka-error "source namespace missing; no output written")
               (let [exists (ka-read (str out "EXISTS" "_SEP"))]
                 (if (not= exists "0") (ka-error "output already exists; refusing overwrite")
                   (let [source (str "(ns kagi.native-source-unity (:export [main]))\n" sha-body "\n" ed-body "\n"
-                                    core-body "\n" vectors-body (if (= mode "gate") "\n" "") entry-body "\n")
+                                    core-body "\n" vectors-body (if (= mode "gate") "\n" "")
+                                    (if (= mode "host") (string-substring entry-body 0 cli-main) entry-body)
+                                    "\n" host-body "\n")
                         written (ka-read (str out "WRITE" "_SEP" source))
                         printed (typed-cap-call 37 :string :string
                                   (str "kagi.native.assembly.v1 " mode " " (ka-hash source) "\n"))]

@@ -8,7 +8,9 @@
 (defn kc-error [s :string] :i64 (let [written (typed-cap-call 39 :string :string (str "kagi: " s "\n"))] 2))
 (defn kc-line-end [s :string start :i64] :i64
   (loop [i start]
-    (if (or (= i (string-length s)) (= (string-code-point-at s i) 10)) i (recur (+ i 1)))))
+    (if (>= i (string-length s)) (string-length s)
+      (let [c (string-code-point-at s i)]
+        (if (= c 10) i (recur (+ i (cond (< c 128) 1 (< c 2048) 2 (< c 65536) 3 :else 4))))))))
 (defn kc-event-end [s :string] :i64
   (loop [i 0 blanks 0]
     (cond (= i (string-length s)) -1

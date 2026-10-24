@@ -1,0 +1,76 @@
+{
+  "schema": "kagi.native.local-host.gate.v1",
+  "host": "aarch64",
+  "artifactSha256": "c67cb006a322e4eef2d04d61bf0cb001c55018ecfbacf0b31315d7a9a7ff6036",
+  "cases": [
+    {
+      "case": "native entropy initialization and owner-only files",
+      "passed": true
+    },
+    {
+      "case": "exclusive initialization preserves existing identity",
+      "passed": true
+    },
+    {
+      "case": "separate process verifies genesis and empty journal",
+      "passed": true
+    },
+    {
+      "case": "node delegate cannot mint a cell-action permit",
+      "passed": true
+    },
+    {
+      "case": "Unicode request refuses without a boundary trap or journal effect",
+      "passed": true
+    },
+    {
+      "case": "changed delegate signature has no journal effect",
+      "passed": true
+    },
+    {
+      "case": "body digest mismatch has no journal effect",
+      "passed": true
+    },
+    {
+      "case": "signature released after durable journal append",
+      "passed": true
+    },
+    {
+      "case": "replayed request preserves committed journal",
+      "passed": true
+    },
+    {
+      "case": "new process restores verified sequence and identity",
+      "passed": true
+    },
+    {
+      "case": "public verified audit resolves a lost signature reply",
+      "passed": true
+    },
+    {
+      "case": "three competing signers release exactly one signature",
+      "passed": true
+    },
+    {
+      "case": "public-mode author seed refuses signing",
+      "passed": true
+    },
+    {
+      "case": "public-mode journal refuses startup",
+      "passed": true
+    },
+    {
+      "case": "truncated journal refuses rather than resetting sequence",
+      "passed": true
+    },
+    {
+      "case": "bounded watcher atomically publishes verified public status",
+      "passed": true
+    }
+  ],
+  "count": 16,
+  "passed": true,
+  "independentCustody": false,
+  "productionQualified": false,
+  "orchestration": "Python diagnostics; entropy, signatures, proof validation and durable journal execute in Amu native ELF"
+}

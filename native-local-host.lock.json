@@ -1,0 +1,52 @@
+{
+  "schema": "kagi.native-local-host.build.v1",
+  "target": "aarch64-linux-static",
+  "compiler": {
+    "repository": "kotoba-lang/amu",
+    "sourceRevision": "2c6be47e9c2883b4bbda5376842a0d643bf0c0e4",
+    "generation": "F3 from diagnostic pr-tier selfhost rebuild",
+    "sha256": "bcebb8885966e325b93868f8b29274a961233811dc5793ce12d26a2afc4803f4",
+    "adoptedRoot": false
+  },
+  "ownerSources": [
+    {
+      "repository": "kotoba-lang/org-nist-sha2",
+      "revision": "ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b",
+      "path": "kotoba/sha2/core.kotoba",
+      "sha256": "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888"
+    },
+    {
+      "repository": "kotoba-lang/org-ietf-ed25519",
+      "revision": "6f17477b5be91a0c8c369b8d30e7e5ea0c10a8aa",
+      "path": "kotoba/ed25519/selfhost.kotoba",
+      "sha256": "47c086f3d93ad4f6da047bbf3b9250f7e4fbc7539ec1a0077abb2d82ceb3dc14"
+    }
+  ],
+  "sourceDigests": {
+    "kotoba/kagi/agent_signer.kotoba": "a164be15e7769924cb7f4981ca6c587aa868149137ce3a2bdee65357eafc24f4",
+    "kotoba/kagi/cli.kotoba": "5848aa363aae2168b390705ef8b311047c625b07d62478a68cd83837359bc7b4",
+    "kotoba/kagi/host.kotoba": "7f4b7f6fdc31087fd2ca805e9fb2e247c07840996960a67ee94a0569363e86e7",
+    "kotoba/kagi/assemble.kotoba": "1a3470b626de68bcd005390ea6462090957e934c0c3542b1f9f2147bfbfe5972"
+  },
+  "assembly": {
+    "sourceSha256": "a1c9d7670f4e5338a88b6baa4e8566a6b23c0c0f52ff0ebd52cd4c94880341f7",
+    "nativeAssemblerSha256": "2578e848dac6d98babb0ff8bcd1142f00bde6802c6d13b5ce62ee89c2dd31dd8"
+  },
+  "artifactSha256": "c67cb006a322e4eef2d04d61bf0cb001c55018ecfbacf0b31315d7a9a7ff6036",
+  "coreGate": {
+    "cases": 32,
+    "result": 32,
+    "artifactSha256": "53e27e3041326066af626914e776d98aaab9354cccb93051d15054b40a80b3cf",
+    "compilerSha256": "255850a85092b1b9ae6657bd83d159295ff1030e92dace9cac7b1410a91ded85",
+    "sourceSha256": "c884f2f44dd659780e18886021b359b2be1b11a2b7f3e2f1e40109f0f035f561"
+  },
+  "replayMutation": {
+    "result": 31,
+    "artifactSha256": "d4d2a438722dfa6cb72caebada4cc67515e0a32c8f95b25bad7908df963efe7a",
+    "sourceSha256": "c889ffc123ec88022c162a2bd9769fb37fd42cdf68791211fa1f2e9a7194257e"
+  },
+  "localSoftwareOnly": true,
+  "productionQualified": false,
+  "projectLinkQualified": false,
+  "cdciQualified": false
+}

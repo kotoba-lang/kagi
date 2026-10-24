@@ -29,27 +29,34 @@ macOS executable or qualification of other targets.
   <public-bundle-file>`. The genesis pin is independent installer/operator
   input; the bundle cannot establish its own trust.
 
-The native signer core passed 28 cases, including an independent OpenSSL
-signature oracle, plus mutations removing management / delegate / replay
-checks. This is a component gate, not production key-custody qualification.
+The native signer core now passes 32 cases (the original 28 plus bounded
+role-purpose sets), including stored signature fixtures derived from an
+independent OpenSSL oracle. The native gates do not invoke OpenSSL for
+signing. Mutations cover management / delegate / replay checks. This is a component gate, not production key-custody qualification.
 The scope string is an exact policy identifier; it does not admit a mon,
 validate a CID, create a Cell or execute an application by itself.
 
 ## Remaining native integration
 
-Native private key generation/storage, durable replay/audit state,
-constant-time / secret-memory qualification, signed node registration,
-hata Cell execution, persistent stdio, Murakumo / Yataverse connection and
-restoration are not yet admitted by this foundation. `status` reports
-custody/node/Cell as unqualified/unconnected. No private seed is exported.
+The separate [local-software host candidate](docs/native-local-host.md)
+adds native entropy/private creation, verified durable replay/audit state,
+delegated signing and public status publication. It depends on the Amu KPV1
+provider candidate and does not replace the foundation `bin/kagi` artifact.
+Public proofs/signatures connect to Murakumo's native local enrollment
+adapter; an admitted node remains inactive without a fresh heartbeat.
 
-The admitted Amu root refused native entropy / clock. Their native
-replacement in [Amu PR #1518](https://github.com/kotoba-lang/amu/pull/1518)
-now passes arm64 provider gates, ENOSYS / grant refusals, combined compiler
-self-rebuild and 24 exact runtime regressions. It remains a candidate pending
-full qualification; no bootstrap root has been replaced.
-Native file metadata, private creation and durable journal operations need
-their own runtime gates before operational custody.
+Constant-time / secret-memory qualification, independent production custody,
+hata Cell execution, persistent stdio, app/service connection and verified
+distributed restoration remain open. No private seed is exported.
+
+At the earlier foundation qualification, its pinned Amu root refused
+entropy / clock. The historical provider work in [Amu PR #1518](https://github.com/kotoba-lang/amu/pull/1518)
+recorded arm64 provider gates, ENOSYS / grant refusals, combined compiler
+self-rebuild and 24 exact runtime regressions. The operational build lock
+below pins the newer candidate actually used by the local host.
+The new private-store runtime gates are recorded separately from the older
+foundation lock. A locally built candidate is not an adopted bootstrap root,
+production custody or a native CDCI controller.
 
 See [native format and evidence](docs/native-agent-signers.md),
 [agent sovereignty ADR](https://github.com/network-awai/network-awai-apex/pull/47),

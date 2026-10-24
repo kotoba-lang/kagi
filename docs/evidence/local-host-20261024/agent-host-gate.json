@@ -1,0 +1,40 @@
+{
+  "schema": "kagi.native.agent-host.gate.v1",
+  "host": "aarch64",
+  "artifactSha256": "c67cb006a322e4eef2d04d61bf0cb001c55018ecfbacf0b31315d7a9a7ff6036",
+  "passed": true,
+  "count": 7,
+  "cases": [
+    {
+      "case": "agent and bot have separate native entropy identities and keysets",
+      "passed": true
+    },
+    {
+      "case": "cell-writes delegate cannot authorize a node declaration",
+      "passed": true
+    },
+    {
+      "case": "foreign bot permit has no effect on agent journal",
+      "passed": true
+    },
+    {
+      "case": "agent signs its delegated cell-action after durable append",
+      "passed": true
+    },
+    {
+      "case": "agent signing leaves bot identity and sequence untouched",
+      "passed": true
+    },
+    {
+      "case": "bounded cell-writes policy also permits state-commit",
+      "passed": true
+    },
+    {
+      "case": "restoration preserves agent history without claiming Cell execution",
+      "passed": true
+    }
+  ],
+  "hataCellExecution": false,
+  "productionQualified": false,
+  "orchestration": "Python diagnostics; native ELF creates keys and signs/verifies/commits"
+}

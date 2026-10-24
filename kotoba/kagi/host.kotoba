@@ -1,0 +1,176 @@
+;; Native local-software signer host. Its private scope is never granted to
+;; an app/LLM/browser. Management and delegate seeds have separate files;
+;; routine signing reads only the author. No old vault or ambient home.
+(ns kagi.host (:export [main]))
+
+(defn kh-nul [] :string (string-from-utf8 (bytes-from-vector-i64 (vector-alloc 1))))
+(defn kh-private [op :string root :string name :string tail :string] :string
+  (let [frame (str (kh-nul) "KPV1" (kh-nul) op root "/" name tail)
+        answer (vector-i64-from-bytes (typed-cap-call 35 :bytes :bytes (string-to-utf8 frame)))]
+    (if (and (> (vector-count answer) 0) (= (vector-at answer 0) 1))
+      (string-from-utf8 (bytes-from-vector-i64 (vector-drop answer 1))) "")))
+(defn kh-read [root :string name :string] :string (kh-private "R" root name ""))
+;; C/A success contains only status 1, so use a separate boolean wrapper.
+(defn kh-write [op :string root :string name :string tail :string] :bool
+  (let [frame (str (kh-nul) "KPV1" (kh-nul) op root "/" name tail)
+        answer (vector-i64-from-bytes (typed-cap-call 35 :bytes :bytes (string-to-utf8 frame)))]
+    (and (= (vector-count answer) 1) (= (vector-at answer 0) 1))))
+(defn kh-create [root :string name :string value :string] :bool
+  (kh-write "C" root name (str (kh-nul) value)))
+(defn kh-now [] :i64 (kg-number (typed-cap-call 7 :string :string "wall")))
+(defn kh-sign-text [seed :string text :string] :string
+  (if (not (kg-hex? seed 64)) ""
+    (let [out (vector-alloc 64) result (sign-into out (hex-bytes seed) (kg-bytes text))]
+      (if (= result 0) (hex out) ""))))
+(defn kh-fields [line :string start :i64 end :i64] :string
+  (loop [i start out ""]
+    (if (= i end) out (recur (+ i 1) (str out (if (= i start) "" " ") (kg-field line i))))))
+(defn kh-config? [config :string] :bool
+  (and (kg-line? config 6) (= (kg-field config 0) "kagi.host.local.v1")
+       (kg-hex? (kg-field config 1) 64) (kg-hex? (kg-field config 2) 64)
+       (> (kg-number (kg-field config 3)) 0) (kg-hex? (kg-field config 4) 64)
+       (kg-public? (kg-field config 5))))
+(defn kh-state [root :string config :string] :string
+  (if (not (kh-config? config)) ""
+    (let [state (kc-verify-bundle (kh-read root "keyset.bundle") (kg-field config 1))]
+      (if (and (= (kg-state-problem state) "") (= (kg-field state 2) (kg-field config 2))
+               (= (kg-field state 5) (kg-field config 5))) state ""))))
+(defn kh-header [config :string] :string (str "kagi.host.journal.v1 " (kg-hash config)))
+(defn kh-cursor-step [cursor :string line :string state :string policy :string fence :i64] :string
+  (if (not (kg-line? line 18)) ""
+    (let [now (kg-number (kg-field line 1)) permit (kh-fields line 2 15)
+          delegate (kg-field line 15) author (kg-field line 16)]
+      (if (= (arena-scope (if (and (= (kg-field line 0) "kagi.host.entry.v1")
+               (>= now (kg-number (kg-field cursor 2)))
+               (= (kg-field line 17) (kg-field cursor 4))
+               (= (kg-permit-problem state policy permit delegate now
+                    (kg-number (kg-field cursor 1)) fence (kg-field cursor 3)) "")
+               (kg-verify (kg-field state 5) (kg-permit-message permit) author)) 1 0)) 1)
+        (str "kagi.host.cursor.v1 " (kg-field permit 10) " " now " " (kg-field permit 7) " " (kg-hash line)) ""))))
+(defn kh-cursor [journal :string config :string state :string policy :string] :string
+  (let [header (str (kh-header config) "\n") h (string-length header) n (string-length journal)]
+    (if (or (< n h) (> n 1048576) (not= (string-substring journal 0 h) header)) ""
+      (loop [start h count 0 cursor (str "kagi.host.cursor.v1 0 0 " (kg-field config 4) " " (kg-hash (kh-header config)))]
+        (if (= start n) cursor
+          (if (or (>= count 4096) (= cursor "")) ""
+            (let [end (kc-line-end journal start)]
+              (if (= end n) ""
+                (let [line (string-substring journal start end)
+                      next (kh-cursor-step cursor line state policy (kg-number (kg-field config 3)))]
+                  (recur (+ end 1) (+ count 1) next))))))))))
+(defn kh-ready? [state :string policy :string cursor :string] :bool
+  (and (= (kg-state-problem state) "") (= (kg-field state 4) "active")
+       (= (kg-policy-problem policy) "") (= (kg-hash policy) (kg-field state 6))
+       (kg-line? cursor 5)))
+(defn kh-status-text [state :string cursor :string now :i64] :string
+  (str "{\"schema\":\"kagi.host.status.v1\",\"mode\":\"local-software\",\"independentCustody\":false,\"productionQualified\":false,\"author\":\"" (kg-field state 5) "\",\"keyset\":\"" (kg-field state 1) "\",\"head\":\"" (kg-field state 2) "\",\"sequence\":" (kg-field cursor 1) ",\"lastWallMs\":" (kg-field cursor 2) ",\"observedAtMs\":" now ",\"nodeConnected\":false,\"cellConnected\":false}\n"))
+(defn kh-publish-status [root :string directory :string] :i64
+  (let [config (kh-read root "config") state (kh-state root config)
+        policy (kh-read root "policy") journal (kh-read root "journal")
+        cursor (kh-cursor journal config state policy) now (kh-now)]
+    (if (or (not (kh-ready? state policy cursor)) (< now (kg-number (kg-field cursor 2)))) 2
+      (let [tmp (str directory "/signer-status.json.tmp") final (str directory "/signer-status.json")
+            status (kh-status-text state cursor now)
+            written (typed-cap-call 35 :string :string (str tmp "WRITE" "_SEP" status))
+            flushed (typed-cap-call 35 :string :string (str tmp "FSYNC" "_SEP"))
+            moved (if (= flushed "1") (typed-cap-call 35 :string :string (str tmp "RENAME" "_SEP" final)) "0")
+            durable (if (= moved "1") (typed-cap-call 35 :string :string (str directory "FSYNC" "_SEP")) "0")]
+        (if (= durable "1") 0 2)))))
+(defn kh-watch [root :string directory :string count :i64] :i64
+  (loop [i 0]
+    (if (= i count) 0
+      (let [result (arena-scope (kh-publish-status root directory))]
+        (if (not= result 0) (kc-error "status proof/journal/clock/publication refused")
+          (let [wait (typed-cap-call 7 :string :string "sleep 5000")] (recur (+ i 1))))))))
+
+;; Initialization is intentionally named local: one administrator controls
+;; the software host, author and guardian. This is not independent custody.
+;; All creates are exclusive. Config is published LAST, so a partial init
+;; cannot become a ready signer. Existing files are never overwritten.
+(defn kh-init [root :string] :i64
+  (let [author (typed-cap-call 23 :string :string "32")
+        guardian (typed-cap-call 23 :string :string "32")
+        delegate (typed-cap-call 23 :string :string "32")
+        public (hex (public-from-seed (hex-bytes author)))
+        gp (hex (public-from-seed (hex-bytes guardian)))
+        dp (hex (public-from-seed (hex-bytes delegate)))
+        policy (str "kagi.agent.policy.v1 " (kc-arg 2) " " (kc-arg 3) " " (kc-arg 4) " " dp " " (kc-arg 5) " " (kc-arg 6))]
+    (if (or (= root "") (not= (kc-arg 7) "") (not= (kg-policy-problem policy) ""))
+      (kc-error "usage: init-local PRIVATE_ROOT agent|node SCOPE AUDIENCE PURPOSE MAX_TTL_MS")
+      (let [event (kg-event "genesis" 0 (kg-zero 64) public (kg-hash policy) (str gp (kg-zero 128)) 1)
+            pin (kg-hash event)
+            manage (str (kh-sign-text guardian (str "kagi.keyset.manage.v1\n" event)) (kg-zero 256))
+            proof (kh-sign-text author (str "kagi.keyset.author.v1\n" event))
+            state (kg-apply "" pin event manage proof)
+            config (str "kagi.host.local.v1 " pin " " pin " 1 " (kg-zero 64) " " public)]
+        (if (or (not= (kg-state-problem state) "")
+                (not (kh-create root "author.seed" author))
+                (not (kh-create root "guardian.seed" guardian))
+                (not (kh-create root "delegate.seed" delegate))
+                (not (kh-create root "policy" policy))
+                (not (kh-create root "keyset.bundle" (str event " " manage " " proof "\n")))
+                (not (kh-create root "journal" (str (kh-header config) "\n")))
+                (not (kh-create root "config" config)))
+          (kc-error "private create/init refused; existing or partial stores are never overwritten")
+          (kc-output (str "{\"schema\":\"kagi.host.init.v1\",\"mode\":\"local-software\",\"independentCustody\":false,\"genesis\":\"" pin "\",\"author\":\"" public "\",\"delegate\":\"" dp "\"}\n")))))))
+(defn kh-operate [command :string root :string] :i64
+  (let [config (kh-read root "config") state (kh-state root config)
+        policy (kh-read root "policy") journal (kh-read root "journal")
+        cursor (kh-cursor journal config state policy) now (kh-now)]
+    (if (or (not (kh-ready? state policy cursor)) (< now (kg-number (kg-field cursor 2))))
+      (kc-error "host state/proof/journal/clock refused")
+      (cond
+        (= command "export-local")
+          (kc-output (str config "\n" policy "\n" (kh-read root "keyset.bundle")))
+        (= command "audit-local")
+          ;; Public permit/signature records, after complete proof validation.
+          ;; This lets a caller resolve a lost reply without signing again.
+          (kc-output journal)
+        (= command "status-local")
+          (kc-output (kh-status-text state cursor now))
+        (= command "permit-local")
+          (let [body (typed-cap-call 35 :string :string (kc-arg 2))
+                permit (str "kagi.agent.permit.v1 " (kg-field state 1) " " (kg-field state 2) " " (kg-field state 3)
+                         " " (if (= (kc-arg 3) "") (kg-field policy 5) (kc-arg 3)) " " (kg-field policy 2) " " (kg-field policy 3) " " (kg-hash body)
+                         " " (kg-field cursor 3) " " (kg-field config 3) " " (+ (kg-number (kg-field cursor 1)) 1)
+                         " " now " " (+ now (kg-number (kg-field policy 6))))
+                signature (kh-sign-text (kh-read root "delegate.seed") permit)]
+            (if (not= (kg-permit-problem state policy permit signature now (kg-number (kg-field cursor 1))
+                         (kg-number (kg-field config 3)) (kg-field cursor 3)) "")
+              (kc-error "local delegate refused") (kc-output (str permit " " signature "\n"))))
+        (or (= command "sign-local") (= command "sign-local-line"))
+          (let [request (typed-cap-call 35 :string :string (kc-arg 2))
+                end (kc-line-end request 0)
+                line (string-substring request 0 end)
+                shaped (kg-line? line 14)
+                permit (if shaped (kh-fields line 0 13) "") delegate (if shaped (kg-field line 13) "")
+                body (typed-cap-call 35 :string :string (kc-arg 3))
+                signature (if (and shaped (= (+ end 1) (string-length request))
+                                   (= (kg-hash body) (kg-field permit 7)))
+                  (kg-sign (hex-bytes (kh-read root "author.seed")) state policy permit delegate now
+                    (kg-number (kg-field cursor 1)) (kg-number (kg-field config 3)) (kg-field cursor 3)) "")]
+            (if (= signature "") (kc-error "sign request refused")
+              (let [commit-time (kh-now)
+                    entry (str "kagi.host.entry.v1 " commit-time " " permit " " delegate " " signature " " (kg-field cursor 4))
+                    committed (and (>= commit-time now) (<= commit-time (kg-number (kg-field permit 12)))
+                      (kh-write "A" root "journal" (str (kh-nul) journal (kh-nul) entry "\n")))
+                    reply-time (kh-now)]
+                (if (or (not committed) (< reply-time commit-time) (> reply-time (kg-number (kg-field permit 12))))
+                  (kc-error "journal/clock/deadline refused; no signature released")
+                  (if (= command "sign-local-line") (kc-output (str permit " " delegate " " signature "\n"))
+                  (kc-output (str "{\"schema\":\"kagi.host.signature.v1\",\"mode\":\"local-software\",\"sequence\":" (kg-field permit 10)
+                    ",\"author\":\"" (kg-field state 5) "\",\"permit\":\"" permit "\",\"delegateSignature\":\"" delegate
+                    "\",\"signature\":\"" signature "\",\"journalHead\":\"" (kg-hash entry) "\"}\n")))))))
+        :else (kc-error "unsupported local host operation")))))
+(defn main [] :i64
+  (let [command (kc-arg 0) root (kc-arg 1)]
+    (cond (= command "init-local") (arena-scope (kh-init root))
+          (= command "watch-local")
+            (let [directory (kc-arg 2) count (kg-number (kc-arg 3))]
+              (if (or (= root "") (= directory "") (< count 1) (> count 720) (not= (kc-arg 4) ""))
+                (kc-error "usage: watch-local PRIVATE_ROOT PUBLIC_DIRECTORY SAMPLES_1_TO_720")
+                (kh-watch root directory count)))
+          (and (or (= command "status-local") (= command "export-local") (= command "audit-local")) (not= root "") (= (kc-arg 2) "")) (kh-operate command root)
+          (and (= command "permit-local") (not= root "") (not= (kc-arg 2) "") (= (kc-arg 4) "")) (kh-operate command root)
+          (and (or (= command "sign-local") (= command "sign-local-line")) (not= root "") (not= (kc-arg 2) "") (not= (kc-arg 3) "") (= (kc-arg 4) "")) (arena-scope (kh-operate command root))
+          :else (kc-error "native local host: init-local | status-local | permit-local | sign-local; no legacy keys"))))
